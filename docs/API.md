@@ -6,12 +6,14 @@ argument generation and share encoding live in `src/shared`.
 
 ## Management endpoints
 
-Management endpoints remain same-origin only. The inference proxy at `/v1`
+Management endpoints remain localhost and same-origin only. The inference proxy at `/v1`
 allows all browser origins without credentialed CORS, handles `OPTIONS`
 preflights locally, and permits requested API headers (including `Authorization`,
 `x-api-key`, and `anthropic-version`). Its CORS policy also applies to upstream
 errors and streaming responses. Upstream CORS headers do not override MCM's
 policy. Cross-origin cookies are not supported.
+Proxy requests also accept container-facing Host headers; those hostnames do not
+grant access to management routes or change the server's loopback network binding.
 
 - `GET /api/bootstrap` -> `Bootstrap` (hfToken NEVER returned)
 - `PUT /api/workspace`, Workspace body -> validated saved Workspace

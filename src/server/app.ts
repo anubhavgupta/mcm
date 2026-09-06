@@ -101,7 +101,6 @@ export async function createApp(options: AppOptions) {
   const hub = new HuggingFace(store, options.hub);
   const app = express();
   app.disable('x-powered-by');
-  app.use(hostGuard);
   app.use((request, response, next) => {
     response.setHeader('X-Content-Type-Options', 'nosniff');
     response.setHeader('Referrer-Policy', 'no-referrer');
@@ -115,7 +114,7 @@ export async function createApp(options: AppOptions) {
     // Express mount trims request.url; ProxyService uses the original URL for routing.
     return proxy.handle(request, response);
   });
-  app.use(guard);
+  app.use(hostGuard, guard);
   app.use('/api', express.json({ limit: '2mb', strict: true }));
   app.get('/api/bootstrap', (_request, response) => {
     response.json({ workspace: store.getWorkspace(), settings: store.publicSettings(), status: manager.getStatus(), usage: usage.getSummary() });

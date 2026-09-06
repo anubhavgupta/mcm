@@ -160,6 +160,14 @@ The upstream must implement the requested endpoint and protocol. MCM does
 **not** translate Anthropic messages into OpenAI requests, emulate missing
 endpoints, or replace upstream errors with success responses.
 
+Docker/container clients may address the inference proxy using a reachable
+container-facing hostname such as `host.docker.internal:7838` or `mcm:7838`.
+The `/v1` routes accept these Host headers; management APIs and the UI still
+require localhost and same-origin access. This does not change MCM's loopback
+binding or configure Docker routing: your container must already have a network
+path or port forward to MCM. A `403` saying “MCM accepts only localhost requests”
+comes from the management Host guard, not a client login requirement.
+
 The gateway preserves streaming output, API-relevant headers, status codes,
 backpressure and cancellation. Use your API client's normal authentication
 headers for an upstream that requires them. The local Hugging Face storage
@@ -222,8 +230,12 @@ requests. A new inference request starts with unavailable timings until measured
 
 Choose **Picture-in-picture** above the Inference card to move its live throughput
 and token counts into an always-on-top window. Executable controls and server logs
-stay on the main page. Use **Return to page** or close
-the PiP window to restore the card. Keep the main MCM tab open: it owns the event
+stay on the main page. Close the PiP window or use **Restore inference card**
+on the main page to restore it. Keep the main MCM tab open: it owns the event
+The PiP window opens at a compact 280-pixel width, sized to the current card
+content with a 32-pixel buffer if the request input/output row has not appeared yet. Unpriced-token explanations and the session footnote stay on the main
+page. Browsers require a user gesture for subsequent window resizing; if later
+content needs more space, resize the window or reopen PiP. Keep the main MCM tab open: it owns the event
 stream. Native Document Picture-in-Picture requires a supporting browser and
 a secure context (localhost qualifies). Other browsers use a floating panel
 inside the current tab, not an always-on-top OS window.

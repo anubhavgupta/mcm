@@ -95,6 +95,53 @@ describe('management API validation and privacy', () => {
 });
 
 describe('streaming protocol passthrough', () => {
+  it.each(['host.docker.internal:7838', 'mcm:7838', '192.168.1.10:7838'])('accepts container-facing Host %s on Anthropic proxy requests', async host => {
+    let forwardedHost: string | undefined;
+    let forwardedVersion: string | undefined;
+    const upstream = await listen(async (request, response) => {
+      forwardedHost = request.headers.host;
+      forwardedVersion = request.headers['anthropic-version'] as string | undefined;
+      for await (const _chunk of request) { /* Drain request before sending the response. */ }
+      response.writeHead(200, { 'Content-Type': 'text/event-stream' });
+      response.end('event: message_stop\ndata: {"type":"message_stop"}\n\n');
+    });
+    const base = await app(upstream);
+    const result = await new Promise<{ status: number | undefined; body: string }>((resolve, reject) => {
+      const request = httpRequest(`${base}/v1/messages`, {
+        method: 'POST', headers: { Host: host, 'Content-Type': 'application/json', 'anthropic-version': '2023-06-01' },
+      }, response => {
+        let body = '';
+        response.setEncoding('utf8');
+        response.on('data', chunk => { body += chunk; });
+        response.once('error', reject);
+        response.once('end', () => resolve({ status: response.statusCode, body }));
+      });
+      request.once('error', reject);
+      request.end('{"messages":[],"stream":true}');
+    });
+    expect(result).toEqual({ status: 200, body: 'event: message_stop\ndata: {"type":"message_stop"}\n\n' });
+    expect(forwardedHost).toBe(new URL(upstream).host);
+    expect(forwardedVersion).toBe('2023-06-01');
+  });
+  it('permits container-host preflight only on the inference proxy, not management routes', async () => {
+    const base = await app();
+    for (const path of ['/v1/messages', '/api/settings', '/api/launch', '/api/usage', '/v10/messages', '/']) {
+      const result = await new Promise<{ status: number | undefined; origin: string | undefined }>((resolve, reject) => {
+        const request = httpRequest(`${base}${path}`, {
+          method: 'OPTIONS', headers: {
+            Host: 'host.docker.internal:7838', Origin: 'http://client.example',
+            'Access-Control-Request-Method': 'POST', 'Access-Control-Request-Headers': 'content-type,x-api-key',
+          },
+        }, response => {
+          response.resume();
+          resolve({ status: response.statusCode, origin: response.headers['access-control-allow-origin'] as string | undefined });
+        });
+        request.once('error', reject);
+        request.end();
+      });
+      expect(result).toEqual(path === '/v1/messages' ? { status: 204, origin: '*' } : { status: 403, origin: undefined });
+    }
+  });
   it('handles cross-origin preflight locally with OpenAI and Anthropic client headers', async () => {
     const upstreamCalls = vi.fn();
     const upstream = await listen((_request, response) => { upstreamCalls(); response.end(); });

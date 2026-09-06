@@ -5,7 +5,7 @@ import { ArrowDownLeft, PictureInPicture2 } from 'lucide-react';
 declare global {
   interface Window {
     documentPictureInPicture?: {
-      requestWindow(options: { width: number; height: number }): Promise<Window>;
+      requestWindow(options: { width: number; height: number; preferInitialWindowPlacement?: boolean }): Promise<Window>;
     };
   }
 }
@@ -19,6 +19,7 @@ export function RuntimePictureInPicture({ children, notify }: {
   const pip = useRef<Window | null>(null);
   const mounted = useRef(true);
   const trigger = useRef<HTMLButtonElement>(null);
+  const inlineContent = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     mounted.current = true;
@@ -44,7 +45,25 @@ export function RuntimePictureInPicture({ children, notify }: {
     }
     setOpening(true);
     try {
-      const child = await window.documentPictureInPicture.requestWindow({ width: 380, height: 600 });
+      if (!inlineContent.current) throw new Error('Inference card is not ready.');
+      // Measure the compact layout synchronously so opening retains the user's activation.
+      const measure = document.createElement('div');
+      measure.className = 'runtime-pip-document runtime-pip-measure';
+      measure.setAttribute('aria-hidden', 'true');
+      measure.inert = true;
+      const snapshot = document.createElement('div');
+      snapshot.className = 'runtime-detached';
+      snapshot.append(inlineContent.current.cloneNode(true));
+      measure.append(snapshot);
+      document.body.append(measure);
+      let height: number;
+      try {
+        // The request counters appear only after inference starts.
+        const requestRowBuffer = snapshot.querySelector('.token-counts') ? 0 : 32;
+        height = Math.ceil(snapshot.getBoundingClientRect().height) + requestRowBuffer;
+      }
+      finally { measure.remove(); }
+      const child = await window.documentPictureInPicture.requestWindow({ width: 280, height, preferInitialWindowPlacement: true });
       if (!mounted.current) { child.close(); return; }
       pip.current = child;
       child.addEventListener('pagehide', () => {
@@ -73,7 +92,7 @@ export function RuntimePictureInPicture({ children, notify }: {
   const content = <div className="runtime-detached" onKeyDown={event => {
     if (event.key === 'Escape' && floating) { event.stopPropagation(); restore(); }
   }}>
-    <div className="runtime-pip-toolbar"><strong>MCM Inference</strong><button className="button secondary" onClick={restore} aria-label="Return inference to page"><ArrowDownLeft size={14} />Return to page</button></div>
+    {floating && <div className="runtime-pip-toolbar"><strong>MCM Inference</strong><button className="button secondary" onClick={restore} aria-label="Return inference to page"><ArrowDownLeft size={14} />Return to page</button></div>}
     {floating && <p className="field-help">Floating in this tab. Native picture-in-picture is not supported by this browser.</p>}
     {children}
   </div>;
@@ -83,7 +102,7 @@ export function RuntimePictureInPicture({ children, notify }: {
       onClick={() => detached ? restore() : void open()} aria-label={detached ? 'Restore inference card' : 'Open inference picture-in-picture'}>
       <PictureInPicture2 size={16} />{opening ? 'Opening...' : detached ? 'Restore inference card' : 'Picture-in-picture'}
     </button>
-    {!detached && children}
+    {!detached && <div ref={inlineContent}>{children}</div>}
     {target && createPortal(content, target)}
     {floating && createPortal(<section className="runtime-floating" aria-label="Floating inference card">{content}</section>, document.body)}
   </div>;

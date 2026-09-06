@@ -1,7 +1,7 @@
 import { createServer } from 'node:net';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
-import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
+import { chromium, expect, test, type APIRequestContext, type Page } from '@playwright/test';
 import { decodeWorkspace, encodeWorkspace } from '../../src/shared/sharing';
 import type { Bootstrap, Workspace } from '../../src/shared/types';
 
@@ -303,7 +303,7 @@ test('records model-priced usage and keeps totals after reloading the page', asy
   const session = page.getByRole('region', { name: 'Current session usage', exact: true });
   await expect(allTime.locator('dd').nth(2)).toHaveText((after.allTime.inputTokens + after.allTime.outputTokens).toLocaleString());
   await expect(session.locator('.usage-cost strong')).toHaveText(new Intl.NumberFormat('en-US', {
-    style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 6,
+    style: 'currency', currency: 'USD', minimumFractionDigits: 5, maximumFractionDigits: 5,
   }).format(after.session.costUsd!));
   await page.reload();
   await expect(page.getByRole('region', { name: 'All-time usage', exact: true }).locator('dd').nth(2))
@@ -436,41 +436,68 @@ test('fits the viewport without horizontal overflow', async ({ page }) => {
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
 });
 
-test('inference floats and restores when native picture-in-picture is unavailable', async ({ page }) => {
+test('inference floats and restores when native picture-in-picture is unavailable', async ({ page, request }) => {
   await page.addInitScript(() => Object.defineProperty(window, 'documentPictureInPicture', { value: undefined }));
+  const usage = (await bootstrap(request)).usage;
+  usage.allTime.unpricedTokens = 7741;
+  await page.route('**/api/events', route => route.fulfill({
+    contentType: 'text/event-stream', body: `data: ${JSON.stringify({ type: 'usage', data: usage })}\n\n`,
+  }));
   await page.goto('/');
+  await expect(page.locator('.usage-unpriced-note')).toBeVisible();
   await page.getByRole('button', { name: 'Open inference picture-in-picture' }).click();
   const floating = page.getByRole('region', { name: 'Floating inference card' });
   await expect(floating.getByText('Token generation', { exact: false })).toBeVisible();
+  await expect(floating.locator('.usage-unpriced-note')).toBeHidden();
+  await expect(floating.locator('.usage-summary-note')).toBeHidden();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
   await expect(floating.getByRole('heading', { name: 'Executable', exact: true })).toHaveCount(0);
   await expect(page.getByRole('heading', { name: 'Server logs', exact: true })).toBeVisible();
   await floating.getByRole('button', { name: 'Return inference to page' }).click();
   await expect(floating).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Open inference picture-in-picture' })).toBeVisible();
+  await expect(page.locator('.usage-unpriced-note')).toBeVisible();
+  await expect(page.locator('.usage-summary-note')).toBeVisible();
 });
 
-test('native inference picture-in-picture restores after closing its window', async ({ page, context, request }) => {
-  await page.goto('/');
-  test.skip(!await page.evaluate(() => !!window.documentPictureInPicture), 'Document PiP is not supported by this browser.');
-  const opened = context.waitForEvent('page');
-  await page.getByRole('button', { name: 'Open inference picture-in-picture' }).click();
-  const pip = await opened;
-  await expect(pip.getByRole('heading', { name: 'Inference', exact: true })).toBeVisible();
-  await expect(pip.getByRole('heading', { name: 'Executable', exact: true })).toHaveCount(0);
-  await expect(pip.getByRole('log')).toHaveCount(0);
-  await expect(page.getByRole('heading', { name: 'Executable', exact: true })).toBeVisible();
-  await expect(pip.getByText('Token generation', { exact: false })).toBeVisible();
-  const launch = await request.post('/api/launch', { data: { modelId: 'tiny' } });
-  expect(launch.ok()).toBe(true);
-  await expect.poll(async () => (await bootstrap(request)).status.phase).toBe('ready');
-  await request.post('/v1/chat/completions', { data: { messages: [{ role: 'user', content: 'Hello' }], stream: true } });
-  await expect(pip.getByText('32.5', { exact: true })).toBeVisible();
-  await expect(page.getByRole('log')).toContainText('Fixture model ready');
-  await pip.close();
-  await expect(page.getByRole('button', { name: 'Open inference picture-in-picture' })).toBeVisible();
-  await expect(page.getByRole('complementary', { name: 'Runtime', exact: true })).toBeVisible();
-  await expect(page.getByText('32.5', { exact: true })).toBeVisible();
+test('native inference picture-in-picture restores after closing its window', async ({ request }) => {
+  const browser = await chromium.launch({ channel: 'chromium', args: ['--screen-info={1920x1080}'] });
+  try {
+    const context = await browser.newContext({ viewport: null, deviceScaleFactor: undefined, isMobile: false, hasTouch: false });
+    const page = await context.newPage();
+    await page.goto('http://127.0.0.1:17838/');
+    test.skip(!await page.evaluate(() => !!window.documentPictureInPicture), 'Document PiP is not supported by this browser.');
+    const opened = context.waitForEvent('page');
+    await page.getByRole('button', { name: 'Open inference picture-in-picture' }).click();
+    const pip = await opened;
+    await expect(pip.getByText('MCM Inference', { exact: true })).toHaveCount(0);
+    await expect(pip.getByRole('button', { name: 'Return inference to page' })).toHaveCount(0);
+    await expect(pip.getByRole('heading', { name: 'Inference', exact: true })).toBeVisible();
+    await expect.poll(() => pip.evaluate(() => window.innerWidth)).toBeLessThanOrEqual(320);
+    await expect.poll(() => pip.evaluate(() => window.innerHeight -
+      document.querySelector('.runtime-detached')!.getBoundingClientRect().height)).toBeGreaterThanOrEqual(28);
+    await expect.poll(() => pip.evaluate(() => window.innerHeight -
+      document.querySelector('.runtime-detached')!.getBoundingClientRect().height)).toBeLessThanOrEqual(40);
+    await expect(pip.locator('.usage-summary-note')).toBeHidden();
+    expect(await pip.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await expect(pip.getByRole('heading', { name: 'Executable', exact: true })).toHaveCount(0);
+    await expect(pip.getByRole('log')).toHaveCount(0);
+    await expect(page.getByRole('heading', { name: 'Executable', exact: true })).toBeVisible();
+    await expect(pip.getByText('Token generation', { exact: false })).toBeVisible();
+    const launch = await request.post('/api/launch', { data: { modelId: 'tiny' } });
+    expect(launch.ok()).toBe(true);
+    await expect.poll(async () => (await bootstrap(request)).status.phase).toBe('ready');
+    await request.post('/v1/chat/completions', { data: { messages: [{ role: 'user', content: 'Hello' }], stream: true } });
+    await expect(pip.getByText('32.5', { exact: true })).toBeVisible();
+    await expect(pip.locator('.token-counts')).toContainText('Request input');
+    await expect.poll(() => pip.evaluate(() => Math.abs(window.innerHeight -
+      document.querySelector('.runtime-detached')!.getBoundingClientRect().height))).toBeLessThanOrEqual(12);
+    await expect(page.getByRole('log')).toContainText('Fixture model ready');
+    await pip.close();
+    await expect(page.getByRole('button', { name: 'Open inference picture-in-picture' })).toBeVisible();
+    await expect(page.getByRole('complementary', { name: 'Runtime', exact: true })).toBeVisible();
+    await expect(page.getByText('32.5', { exact: true })).toBeVisible();
+  } finally { await browser.close(); }
 });
 
 test('picture-in-picture rejection leaves runtime on the page', async ({ page }) => {

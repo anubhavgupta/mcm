@@ -491,6 +491,18 @@ svg { flex-shrink: 0; }
 .runtime-detached { padding: 12px; min-width: 0; }
 .runtime-detached .runtime-panel { position: static; display: flex; flex-direction: column; margin: 0; }
 .runtime-pip-document { margin: 0; min-width: 0; overflow: auto; }
+.runtime-pip-document .runtime-detached { padding: 6px; }
+.runtime-pip-measure { position: fixed; left: -10000px; top: 0; width: 280px; visibility: hidden; pointer-events: none; }
+.runtime-detached .usage-unpriced-note, .runtime-detached .usage-summary-note { display: none; }
+.runtime-pip-document .runtime-card { padding: 12px; }
+.runtime-pip-document .runtime-heading h2 { font-size: 12px; }
+.runtime-pip-document .metrics-grid { gap: 8px; margin: 12px 0; }
+.runtime-pip-document .metrics-grid > div + div { padding-left: 12px; }
+.runtime-pip-document .metrics-grid > div > span { font-size: 9px; }
+.runtime-pip-document .metrics-grid strong { font-size: 30px; }
+.runtime-pip-document .metrics-grid small { font-size: 8px; }
+.runtime-pip-document .metrics-grid abbr { display: inline; }
+.runtime-pip-document .metric-footnote { font-size: 8px; }
 .runtime-floating { position: fixed; z-index: 40; right: 16px; bottom: 16px; width: min(380px, calc(100vw - 32px)); max-height: calc(100dvh - 32px); overflow: auto; background: #f7f9f3; border: 1px solid #cdd8c5; border-radius: 12px; box-shadow: 0 12px 48px #182b2433; }
 .usage-summary { margin-top: 14px; border-top: 1px solid var(--line); }
 .usage-period { padding: 12px 0; border-bottom: 1px solid var(--line); }

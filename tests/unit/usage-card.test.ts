@@ -35,12 +35,26 @@ describe('recorded usage card', () => {
     usage.session.costUsd = 0;
     const markup = renderToStaticMarkup(createElement(UsageTotals, { usage }));
     expect(markup).toContain('Estimated token value');
-    expect(markup).toContain('$0.00');
+    expect(markup).toContain('<strong>$0.00000</strong>');
   });
   it('does not round a positive sub-microdollar cost to free', () => {
     const usage = fixture();
     usage.session.costUsd = 0.0000001;
-    expect(renderToStaticMarkup(createElement(UsageTotals, { usage }))).toContain('&lt;$0.000001');
+    expect(renderToStaticMarkup(createElement(UsageTotals, { usage }))).toContain('&lt;$0.00001');
+  });
+  it.each([
+    [0.1, '$0.10000'],
+    [0.1234, '$0.12340'],
+    [0.12345, '$0.12345'],
+    [0.123456, '$0.12346'],
+    [1, '$1.00000'],
+  ])('shows exactly five decimal places for %s in both usage rows', (value, expected) => {
+    const usage = fixture();
+    usage.allTime.costUsd = value;
+    usage.session.costUsd = value;
+    const markup = renderToStaticMarkup(createElement(UsageTotals, { usage }));
+    expect(markup.split(`<strong>${expected}</strong>`)).toHaveLength(3);
+    expect(usage.allTime.costUsd).toBe(value);
   });
   it('labels partial pricing, incomplete usage and accounting errors', () => {
     const usage = fixture();
