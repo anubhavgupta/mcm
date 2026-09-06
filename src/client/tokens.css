@@ -1,0 +1,13 @@
+:root {
+  color-scheme: light;
+  --sans: "Inter", "SF Pro Text", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  --canvas: #f8f9f5;
+  --ink: #35462f;
+  --muted: #7f8c74;
+  --line: #e3e8dc;
+  --line-strong: #d9e1d1;
+  --teal: #397359;
+  --nav: #1f3027;
+  --sidebar-width: 246px;
+}

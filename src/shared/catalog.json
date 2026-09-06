@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "sections": [
+    { "id": "compute", "title": "Compute", "description": "Balance model placement and parallelism." },
+    { "id": "sampling", "title": "Sampling", "description": "Shape the model's output." },
+    { "id": "memory", "title": "Memory & context", "description": "Control context size and KV cache behavior." },
+    { "id": "advanced", "title": "Advanced", "description": "Templates, reasoning, and speculative decoding." }
+  ],
+  "fields": [
+    { "key": "gpuLayers", "label": "GPU layers", "section": "compute", "control": "number", "flag": "--gpu-layers", "aliases": ["--n-gpu-layers", "-ngl"], "default": 99, "min": 0, "max": 1000, "integer": true, "description": "Set 0 for CPU-only inference." },
+    { "key": "threads", "label": "CPU threads", "section": "compute", "control": "number", "flag": "--threads", "aliases": ["-t"], "default": 8, "min": 1, "max": 1024, "integer": true },
+    { "key": "parallel", "label": "Parallel slots", "section": "compute", "control": "number", "flag": "--parallel", "aliases": ["-np"], "default": 1, "min": 1, "max": 256, "integer": true },
+    { "key": "cpuMoe", "label": "Keep MoE experts on CPU", "section": "compute", "control": "toggle", "flag": "--cpu-moe", "default": false },
+    { "key": "temperature", "label": "Temperature", "section": "sampling", "control": "number", "flag": "--temp", "default": 0.7, "min": 0, "max": 10, "step": 0.05 },
+    { "key": "topK", "label": "Top K", "section": "sampling", "control": "number", "flag": "--top-k", "default": 20, "min": 0, "max": 100000, "integer": true, "description": "0 disables top-k sampling." },
+    { "key": "topP", "label": "Top P", "section": "sampling", "control": "number", "flag": "--top-p", "default": 0.95, "min": 0, "max": 1, "step": 0.01 },
+    { "key": "minP", "label": "Min P", "section": "sampling", "control": "number", "flag": "--min-p", "default": 0.05, "min": 0, "max": 1, "step": 0.01 },
+    { "key": "repeatPenalty", "label": "Repeat penalty", "section": "sampling", "control": "number", "flag": "--repeat-penalty", "default": 1, "min": 0, "max": 10, "step": 0.05 },
+    { "key": "presencePenalty", "label": "Presence penalty", "section": "sampling", "control": "number", "flag": "--presence-penalty", "default": 0, "min": -2, "max": 2, "step": 0.1 },
+    { "key": "contextSize", "label": "Context size", "section": "memory", "control": "number", "flag": "--ctx-size", "aliases": ["-c"], "default": 8192, "min": 0, "max": 2097152, "integer": true, "description": "0 uses the model's context size." },
+    { "key": "loadMode", "label": "Load mode", "section": "memory", "control": "select", "flag": "--load-mode", "default": "mmap", "options": ["auto", "none", "mmap", "mlock", "mmap+mlock", "dio"] },
+    { "key": "flashAttention", "label": "Flash attention", "section": "memory", "control": "select", "flag": "--flash-attn", "aliases": ["-fa"], "default": "auto", "options": ["auto", "on", "off"] },
+    { "key": "cacheRam", "label": "Cache RAM (MiB)", "section": "memory", "control": "number", "flag": "--cache-ram", "default": 8192, "min": -1, "max": 2097152, "integer": true, "description": "-1 is unlimited; 0 disables the RAM cache." },
+    { "key": "swaFull", "label": "Full sliding-window cache", "section": "memory", "control": "toggle", "flag": "--swa-full", "default": false },
+    { "key": "noKvOffload", "label": "Keep KV cache on CPU", "section": "memory", "control": "toggle", "flag": "--no-kv-offload", "default": false },
+    { "key": "customKv", "label": "Customize KV cache types", "section": "memory", "control": "toggle", "default": false, "description": "Enable the key and value cache controls below." },
+    { "key": "cacheTypeK", "label": "Key cache type", "section": "memory", "control": "select", "flag": "--cache-type-k", "aliases": ["-ctk"], "default": "f16", "options": ["f32", "f16", "bf16", "q8_0", "q4_0", "q4_1", "iq4_nl", "q5_0", "q5_1", "kvarn2", "kvarn3", "kvarn4", "kvarn5", "kvarn6", "kvarn8"], "dependsOn": { "key": "customKv", "equals": true }, "description": "KVarN types require a compatible llama.cpp fork." },
+    { "key": "cacheTypeV", "label": "Value cache type", "section": "memory", "control": "select", "flag": "--cache-type-v", "aliases": ["-ctv"], "default": "f16", "options": ["f32", "f16", "bf16", "q8_0", "q4_0", "q4_1", "iq4_nl", "q5_0", "q5_1", "kvarn2", "kvarn3", "kvarn4", "kvarn5", "kvarn6", "kvarn8"], "dependsOn": { "key": "customKv", "equals": true } },
+    { "key": "jinja", "label": "Jinja templates", "section": "advanced", "control": "toggle", "flag": "--jinja", "default": true },
+    { "key": "chatTemplateKwargs", "label": "Chat template options", "section": "advanced", "control": "json", "flag": "--chat-template-kwargs", "default": "", "dependsOn": { "key": "jinja", "equals": true }, "description": "Optional JSON object passed to the model's chat template." },
+    { "key": "reasoning", "label": "Reasoning", "section": "advanced", "control": "select", "flag": "--reasoning", "default": "auto", "options": ["auto", "on", "off"] },
+    { "key": "speculation", "label": "Speculation", "section": "advanced", "control": "select", "flag": "--spec-type", "default": "none", "options": ["none", "ngram-mod", "draft-mtp"], "omitValues": ["none"], "description": "Available modes depend on your llama.cpp build and model." },
+    { "key": "draftMax", "label": "Maximum draft tokens", "section": "advanced", "control": "number", "flag": "--spec-draft-n-max", "default": 4, "min": 1, "max": 256, "integer": true, "dependsOn": { "key": "speculation", "equals": "draft-mtp" } },
+    { "key": "verbose", "label": "Verbose server logs", "section": "advanced", "control": "toggle", "flag": "--verbose", "default": false }
+  ]
+}
