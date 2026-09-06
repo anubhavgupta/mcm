@@ -23,12 +23,13 @@ const settingsShape = {
   }, 'Use an HTTP(S) origin without credentials, path, query or fragment.'),
   modelBindings: z.record(z.string().regex(/^[a-zA-Z0-9_-]{1,100}$/), relativeBinding),
   hfRepo: z.union([z.literal(''), repoSchema]),
+  anthropicMode: z.enum(['passthrough', 'openai']).optional(),
   hfToken: z.string().max(4096).refine(value => !/[\x00-\x20\x7f]/.test(value), 'Invalid token.').optional(),
 };
 export const settingsSchema = z.object(settingsShape).strict();
 export const settingsUpdateSchema = z.object(settingsShape).partial().extend({ clearHfToken: z.boolean().optional() }).strict();
 export const defaultSettings: LocalSettings = {
-  executablePath: '', modelsDirectory: '', serverPort: 8080, upstreamUrl: '', modelBindings: {}, hfRepo: '',
+  executablePath: '', modelsDirectory: '', serverPort: 8080, upstreamUrl: '', modelBindings: {}, hfRepo: '', anthropicMode: 'passthrough',
 };
 
 export async function syncDirectory(path: string, platform: NodeJS.Platform = process.platform): Promise<void> {
@@ -97,7 +98,7 @@ export class Store {
   getSettings(): LocalSettings { return structuredClone(this.settings); }
   publicSettings(): PublicSettings {
     const { hfToken, ...settings } = this.getSettings();
-    return { ...settings, hfTokenConfigured: Boolean(hfToken) };
+    return { ...settings, anthropicMode: settings.anthropicMode ?? 'passthrough', hfTokenConfigured: Boolean(hfToken) };
   }
   redact(text: string): string {
     const token = this.settings.hfToken;

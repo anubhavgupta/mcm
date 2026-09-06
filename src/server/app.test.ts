@@ -438,6 +438,236 @@ describe('streaming protocol passthrough', () => {
   });
 });
 
+describe('optional Anthropic protocol translation', () => {
+  it('finishes successfully on DONE even if upstream keeps the HTTP connection open', async () => {
+    let closed = false;
+    const upstream = await listen(async (request, response) => {
+      for await (const _chunk of request) { /* Drain body. */ }
+      response.writeHead(200, { 'Content-Type': 'text/event-stream' });
+      response.write('data: {"choices":[{"delta":{"content":"done"}}],"usage":{"prompt_tokens":3,"completion_tokens":1}}\n\ndata: [DONE]\n\n');
+      response.once('close', () => { closed = true; });
+    });
+    const base = await app(upstream);
+    await runtime!.store.saveSettings({ anthropicMode: 'openai' });
+    const response = await fetch(`${base}/v1/messages`, { method: 'POST',
+      body: JSON.stringify({ model: 'local', max_tokens: 10, messages: [{ role: 'user', content: 'Hi' }], stream: true }) });
+    const text = await response.text();
+    expect(text).toContain('event: message_stop');
+    await vi.waitFor(() => expect(closed).toBe(true));
+    expect(runtime!.usage.getSummary().session).toMatchObject({ inputTokens: 3, outputTokens: 1, missingUsageRequests: 0 });
+  });
+      const body = { model: 'local', max_tokens: 256, messages: [{ role: 'user', content: 'Hi' }] };
+      const jsonCompletion = { id: 'chat-1', model: 'local', choices: [{ message: { content: 'Hello 😊' }, finish_reason: 'stop' }],
+        usage: { prompt_tokens: 10, completion_tokens: 2 } };
+      const sse = (value: unknown) => `data: ${JSON.stringify(value)}\n\n`;
+      async function enabled(upstream: string, interceptors?: Interceptor[]) {
+        const base = await app(upstream, interceptors);
+        await runtime!.store.saveSettings({ anthropicMode: 'openai' });
+        return base;
+      }
+      it('translates after trusted hooks, preserves original context/auth/query/CORS and prices the final outbound model', async () => {
+        let observed: Record<string, unknown> = {};
+        const upstream = await listen(async (request, response) => {
+          let data = '';
+          for await (const chunk of request) data += chunk;
+          observed = { path: request.url, body: JSON.parse(data), auth: request.headers.authorization,
+            key: request.headers['x-api-key'], host: request.headers.host, encoding: request.headers['accept-encoding'] };
+          const output = JSON.stringify({ ...jsonCompletion, usage: { prompt_tokens: 1000000, completion_tokens: 1000000 } });
+          response.writeHead(201, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(output),
+            'Content-MD5': 'stale', ETag: '"stale"', 'X-Upstream': 'yes' });
+          response.end(output);
+        });
+        const contexts: unknown[] = [];
+        const raw: Uint8Array[] = [];
+        const base = await enabled(upstream, [{
+          beforeRequest: async (context, outbound) => {
+            contexts.push(context);
+            const original = JSON.parse(Buffer.from(await outbound.readBody()).toString());
+            outbound.body = JSON.stringify({ ...original, model: 'priced' });
+          },
+          onResponseChunk: (_context, chunk) => { raw.push(chunk); },
+        }]);
+        await runtime!.store.saveWorkspace({ ...emptyWorkspace(), models: [{
+          id: 'priced', name: 'Priced', model: { filename: 'model.gguf' }, values: { inputUsdPerMillion: 2, outputUsdPerMillion: 4 },
+        }] });
+        const response = await fetch(`${base}/v1/messages/?beta=true`, { method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: 'Bearer client-token', 'x-api-key': 'client-key', Origin: 'https://client.example' },
+          body: JSON.stringify(body) });
+        expect(response.status).toBe(201);
+        expect(response.headers.get('content-md5')).toBeNull();
+        expect(response.headers.get('etag')).toBeNull();
+        expect(response.headers.get('content-encoding')).toBeNull();
+        expect(response.headers.get('x-upstream')).toBe('yes');
+        expect(response.headers.get('access-control-allow-origin')).toBe('*');
+        expect(await response.json()).toMatchObject({ type: 'message', content: [{ type: 'text', text: 'Hello 😊' }], stop_reason: 'end_turn' });
+        expect(observed).toMatchObject({ path: '/v1/chat/completions?beta=true', body: { model: 'priced', max_tokens: 256, messages: body.messages },
+          auth: 'Bearer client-token', key: 'client-key', host: new URL(upstream).host, encoding: 'identity' });
+        expect(contexts[0]).toMatchObject({ protocol: 'anthropic', path: '/v1/messages/?beta=true' });
+        expect(JSON.parse(Buffer.concat(raw).toString())).toHaveProperty('choices');
+        expect(JSON.stringify(observed)).not.toContain('hf_machine_secret');
+        await vi.waitFor(() => expect(runtime!.usage.getSummary().session.costUsd).toBe(6));
+      });
+      it('leaves count_tokens, other OpenAI paths and non-POST requests byte-for-byte unchanged', async () => {
+        let seen = '';
+        const upstream = await listen(async (request, response) => {
+          let body = '';
+          for await (const chunk of request) body += chunk;
+          seen = `${request.method} ${request.url} ${body}`;
+          response.setHeader('Content-Type', 'application/json');
+          response.end('{"native": true}\n');
+        });
+        const base = await enabled(upstream);
+        for (const [method, path] of [['POST', '/v1/messages/count_tokens?beta=true'], ['GET', '/v1/messages'], ['POST', '/v1/chat/completions']]) {
+          const response = await fetch(`${base}${path}`, { method, ...(method === 'POST' ? { body: 'unmodified bytes' } : {}) });
+          expect(await response.text()).toBe('{"native": true}\n');
+          expect(seen).toBe(`${method} ${path} ${method === 'POST' ? 'unmodified bytes' : ''}`);
+        }
+        await runtime!.store.saveSettings({ anthropicMode: 'passthrough' });
+        const response = await fetch(`${base}/v1/messages/?x=1`, { method: 'POST', body: 'unmodified bytes' });
+        expect(await response.text()).toBe('{"native": true}\n');
+        expect(seen).toBe('POST /v1/messages/?x=1 unmodified bytes');
+      });
+      it('publishes native PP/TG and live usage before the gated upstream finishes, then persists final counts once', async () => {
+        let upstreamResponse: import('node:http').ServerResponse | undefined;
+        let outgoing: Record<string, unknown> = {};
+        const upstream = await listen(async (request, response) => {
+          let data = '';
+          for await (const chunk of request) data += chunk;
+          outgoing = JSON.parse(data);
+          upstreamResponse = response;
+          response.writeHead(200, { 'Content-Type': 'text/event-stream' });
+          response.write(sse({ choices: [{ delta: { content: 'Hello' } }], usage: { completion_tokens: 0 } }) +
+            sse({ timings: { prompt_n: 10, predicted_n: 1, prompt_per_second: 125.5, predicted_per_second: 32.5 } }));
+        });
+        const base = await enabled(upstream);
+        const emit = vi.spyOn(runtime!.events, 'emit');
+        const response = await fetch(`${base}/v1/messages`, { method: 'POST', body: JSON.stringify({ ...body, stream: true }) });
+        const reader = response.body!.getReader();
+        const first = Buffer.from((await reader.read()).value!).toString();
+        expect(first).toContain('message_start');
+        expect(first).not.toContain('message_stop');
+        expect(outgoing).toMatchObject({ timings_per_token: true, stream_options: { include_usage: true }, stream: true });
+        await vi.waitFor(() => expect(runtime!.usage.getSummary().session).toMatchObject({ inputTokens: 10, outputTokens: 1, requestCount: 1 }));
+        expect(runtime!.usage.getSummary().session.costUsd).toBeGreaterThan(0);
+        expect(emit.mock.calls.some(([event]) => event.type === 'throughput' && event.data.pp === 125.5 &&
+          event.data.tg === 32.5 && event.data.protocol === 'anthropic' && event.data.active)).toBe(true);
+        expect(upstreamResponse!.writableEnded).toBe(false);
+        upstreamResponse!.end(sse({ timings: { prompt_n: 10, predicted_n: 2 } }) + 'data: [DONE]\n\n');
+        let final = first;
+        while (true) { const next = await reader.read(); if (next.done) break; final += Buffer.from(next.value).toString(); }
+        expect(final).toContain('"output_tokens":2');
+        expect(final).toContain('"stop_reason":"end_turn"');
+        expect(final).not.toContain('timings');
+        await runtime!.close();
+        expect(runtime!.usage.getSummary().session).toMatchObject({ inputTokens: 10, outputTokens: 2, requestCount: 1, missingUsageRequests: 0 });
+        runtime = await createApp({ dataDir: directory });
+        expect(runtime.usage.getSummary().allTime).toMatchObject({ inputTokens: 10, outputTokens: 2, requestCount: 1 });
+      });
+      it.each([400, 401, 429, 503])('preserves upstream HTTP %i and retry headers while formatting errors', async status => {
+        const upstream = await listen(async (request, response) => {
+          for await (const _chunk of request) { /* Drain body. */ }
+          response.writeHead(status, { 'Content-Type': 'application/json', 'Retry-After': '7' });
+          response.end('{"error":{"message":"Upstream unavailable","type":"server_error"}}');
+        });
+        const base = await enabled(upstream);
+        const response = await fetch(`${base}/v1/messages`, { method: 'POST', body: JSON.stringify({ ...body, stream: true }) });
+        expect(response.status).toBe(status);
+        expect(response.headers.get('retry-after')).toBe('7');
+        expect(await response.json()).toMatchObject({ type: 'error', error: { message: 'Upstream unavailable' } });
+      });
+      it.each([
+        ['invalid JSON', '{bad'],
+        ['unsupported block', JSON.stringify({ ...body, messages: [{ role: 'user', content: [{ type: 'document', data: 'sensitive prompt' }] }] })],
+        ['oversized JSON', JSON.stringify({ ...body, system: 'x'.repeat(2 * 1024 * 1024) })],
+      ])('fails closed with actionable Anthropic 400 for %s', async (_label, payload) => {
+        const called = vi.fn();
+        const upstream = await listen((_request, response) => { called(); response.end(); });
+        const base = await enabled(upstream);
+        const response = await fetch(`${base}/v1/messages`, { method: 'POST', body: payload });
+        expect(response.status).toBe(400);
+        const error = await response.json();
+        expect(error).toMatchObject({ type: 'error', error: { type: 'invalid_request_error' } });
+        expect(JSON.stringify(error)).not.toContain('sensitive prompt');
+        expect(called).not.toHaveBeenCalled();
+      });
+      it.each(['compressed', 'oversized', 'invalid-json', 'ignored-stream'])('fails closed on an incompatible upstream: %s', async mode => {
+        const upstream = await listen(async (request, response) => {
+          for await (const _chunk of request) { /* Drain body. */ }
+          response.writeHead(200, { 'Content-Type': 'application/json', ...(mode === 'compressed' ? { 'Content-Encoding': 'gzip' } : {}) });
+          response.end(mode === 'oversized' ? JSON.stringify({ padding: 'x'.repeat(2 * 1024 * 1024) }) :
+            mode === 'invalid-json' ? '<html>not JSON</html>' : JSON.stringify(jsonCompletion));
+        });
+        const base = await enabled(upstream);
+        const response = await fetch(`${base}/v1/messages`, { method: 'POST', body: JSON.stringify({ ...body, stream: mode === 'ignored-stream' }) });
+        expect(response.status).toBe(502);
+        expect(await response.json()).toMatchObject({ type: 'error', error: { type: 'api_error' } });
+      });
+      it('emits a partial-stream error without a success-shaped ending and records failure exactly once', async () => {
+        const upstream = await listen(async (request, response) => {
+          for await (const _chunk of request) { /* Drain body. */ }
+          response.writeHead(200, { 'Content-Type': 'text/event-stream' });
+          response.end(sse({ choices: [{ delta: { content: 'partial' } }], timings: { prompt_n: 10, predicted_n: 1 } }) +
+            sse({ error: { message: 'Backend failed' } }));
+        });
+        const base = await enabled(upstream);
+        const response = await fetch(`${base}/v1/messages`, { method: 'POST', body: JSON.stringify({ ...body, stream: true }) });
+        const output = await response.text();
+        expect(output).toContain('event: error');
+        expect(output).not.toContain('message_stop');
+        await vi.waitFor(() => expect(runtime!.usage.getSummary().session).toMatchObject({ requestCount: 1, missingUsageRequests: 1 }));
+      });
+      it('cancels a translated upstream when the downstream aborts', async () => {
+        let cancelled = false;
+        const upstream = await listen(async (request, response) => {
+          for await (const _chunk of request) { /* Drain body. */ }
+          response.writeHead(200, { 'Content-Type': 'text/event-stream' });
+          response.write(sse({ choices: [{ delta: { content: 'first' } }] }));
+          response.once('close', () => { cancelled = true; });
+        });
+        const base = await enabled(upstream);
+        const controller = new AbortController();
+        const response = await fetch(`${base}/v1/messages`, { method: 'POST', body: JSON.stringify({ ...body, stream: true }), signal: controller.signal });
+        await response.body!.getReader().read();
+        controller.abort();
+        await vi.waitFor(() => expect(cancelled).toBe(true));
+      });
+      it('applies downstream backpressure to translated content instead of buffering the whole upstream', async () => {
+        let bytesWritten = 0;
+        let closed = false;
+        const limit = 128 * 1024 * 1024;
+        const upstream = await listen(async (request, response) => {
+          for await (const _chunk of request) { /* Drain body. */ }
+          response.writeHead(200, { 'Content-Type': 'text/event-stream' });
+          const chunk = sse({ choices: [{ delta: { content: 'x'.repeat(32 * 1024) } }] });
+          const pump = () => {
+            while (!closed && bytesWritten < limit) {
+              bytesWritten += chunk.length;
+              if (!response.write(chunk)) { response.once('drain', pump); return; }
+            }
+            if (!closed) response.end('data: [DONE]\n\n');
+          };
+          response.once('close', () => { closed = true; });
+          pump();
+        });
+        const base = await enabled(upstream);
+        await new Promise<void>((resolve, reject) => {
+          const request = httpRequest(`${base}/v1/messages`, { method: 'POST' }, response => {
+            response.pause();
+            setTimeout(() => {
+              try { expect(bytesWritten).toBeLessThan(limit); }
+              catch (error) { reject(error); }
+              response.destroy();
+              request.destroy();
+              resolve();
+            }, 100);
+          });
+          request.once('error', reject);
+          request.end(JSON.stringify({ ...body, stream: true }));
+        });
+        await vi.waitFor(() => expect(closed).toBe(true));
+      });
+});
+
 describe('inference accounting API integration', () => {
   const pricedModel = {
     id: 'priced', name: 'Priced', model: { filename: 'priced.gguf' }, values: {},

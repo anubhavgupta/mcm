@@ -55,6 +55,7 @@ test.beforeEach(async ({ request }) => {
     modelsDirectory: path.resolve('tests/fixtures/models'),
     serverPort: await freePort(),
     upstreamUrl: '',
+    anthropicMode: 'passthrough',
     modelBindings: {},
     hfRepo: '',
     clearHfToken: true,
@@ -401,6 +402,57 @@ test('pricing cards inherit group rates, allow model overrides and apply them to
   await expect(input).toHaveValue('0.75');
   await expect(inputCard.locator('.origin-badge')).toHaveText('Group');
   await page.getByRole('button', { name: 'Save changes', exact: true }).click();
+});
+
+test('optional Anthropic translation exposes live timing and valued usage before completion', async ({ page, request }) => {
+  await jsonPut(request, '/api/workspace', {
+    ...fixture, models: [{ ...fixture.models[0], values: { inputUsdPerMillion: 2, outputUsdPerMillion: 4 } }],
+  });
+  await page.goto('/');
+  await openNavigation(page);
+  await page.getByRole('button', { name: 'Machine settings', exact: true }).click();
+  const mode = page.getByRole('combobox', { name: 'Anthropic proxy mode', exact: true });
+  await expect(mode).toHaveValue('passthrough');
+  await mode.selectOption('openai');
+  await page.getByRole('button', { name: 'Save settings', exact: true }).click();
+  await expect.poll(async () => (await bootstrap(request)).settings.anthropicMode).toBe('openai');
+  await selectModel(page);
+  await page.getByRole('button', { name: 'Launch model', exact: true }).click();
+  await expect.poll(async () => (await bootstrap(request)).status.phase).toBe('ready');
+  const before = (await bootstrap(request)).usage;
+  let completed = false;
+  const requestData = { model: 'mock-model', max_tokens: 128, thinking: { type: 'adaptive' }, messages: [{ role: 'user', content: 'Hello' }] };
+  const responsePromise = request.post('/v1/messages', {
+    headers: { 'anthropic-version': '2023-06-01' },
+    data: { ...requestData, stream: true },
+  }).then(response => { completed = true; return response; });
+  try {
+    await expect(page.getByText('125.5', { exact: true })).toBeVisible();
+    await expect(page.getByText('32.5', { exact: true })).toBeVisible();
+    await expect(page.getByRole('region', { name: 'Current session usage', exact: true }).locator('dd').nth(1))
+      .toHaveText((before.session.outputTokens + 1).toLocaleString());
+    expect((await bootstrap(request)).usage.session.costUsd! - (before.session.costUsd ?? 0)).toBeCloseTo(0.000024, 10);
+    expect(completed).toBe(false);
+  } finally { await responsePromise; }
+  const response = await responsePromise;
+  expect(response.ok()).toBe(true);
+  expect(response.headers()['content-type']).toContain('text/event-stream');
+  const stream = await response.text();
+  expect(stream).toMatch(/event:\s*message_start/);
+  expect(stream).toMatch(/event:\s*message_stop/);
+  expect(stream).not.toContain('"choices"');
+  expect(stream).not.toContain('[DONE]');
+  await expect.poll(async () => (await bootstrap(request)).usage.session.outputTokens).toBe(before.session.outputTokens + 2);
+  const json = await request.post('/v1/messages', { data: { ...requestData, stream: false } });
+  expect(json.ok()).toBe(true);
+  expect(await json.json()).toMatchObject({
+    type: 'message', role: 'assistant', content: [{ type: 'text', text: 'Hello' }],
+    usage: { input_tokens: 10, output_tokens: 2 },
+  });
+  await page.reload();
+  await openNavigation(page);
+  await page.getByRole('button', { name: 'Machine settings', exact: true }).click();
+  await expect(mode).toHaveValue('openai');
 });
 
 test('both usage rows update while an inference stream is still running', async ({ page, request }) => {

@@ -6,6 +6,14 @@ argument generation and share encoding live in `src/shared`.
 
 ## Management endpoints
 
+Machine settings accept optional `anthropicMode: "passthrough" | "openai"`.
+Absent values retain passthrough behavior. With `"openai"`, only
+`POST /v1/messages` is translated to upstream `/v1/chat/completions`; the client
+still receives Anthropic JSON or SSE. Streaming translation requests
+`timings_per_token: true` and usage reports. Native upstream measurements are
+observed before response conversion, so token accounting does not depend on
+the Anthropic protocol exposing per-token usage.
+
 Management endpoints remain localhost and same-origin only. The inference proxy at `/v1`
 allows all browser origins without credentialed CORS, handles `OPTIONS`
 preflights locally, and permits requested API headers (including `Authorization`,

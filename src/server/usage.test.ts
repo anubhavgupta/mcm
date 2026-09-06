@@ -198,6 +198,16 @@ describe('reported request token observation', () => {
     await finish();
     expect(usage.getSummary().session).toMatchObject({ inputTokens: 0, outputTokens: 0, costUsd: 0, missingUsageRequests: 0 });
   });
+  it.each([0, 4])('uses timings after a streaming placeholder zero but honors late final API usage %i', async final => {
+    const { send, finish } = start({ streaming: true });
+    send({ choices: [{ delta: { role: 'assistant' } }], usage: { prompt_tokens: 8, completion_tokens: 0 } });
+    send({ choices: [{ delta: { content: 'not a token count' } }], timings: { predicted_n: 3 } });
+    expect(usage.getSummary().session).toMatchObject({ inputTokens: 8, outputTokens: 3, requestCount: 1 });
+    send({ choices: [{ delta: {}, finish_reason: 'stop' }] });
+    send({ choices: [], usage: { prompt_tokens: 8, completion_tokens: final } });
+    await finish();
+    expect(usage.getSummary().session).toMatchObject({ inputTokens: 8, outputTokens: final, requestCount: 1 });
+  });
   it.each(['one', 'One', 'one.gguf', 'owner/one'])('resolves unambiguous outbound model alias %s', async requestModel => {
     const { send, finish } = start({ requestModel });
     send({ usage: { prompt_tokens: 1, completion_tokens: 1 } });

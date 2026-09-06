@@ -97,7 +97,8 @@ export async function createApp(options: AppOptions) {
       managedModelId: targetsManagedServer ? manager.getStatus().modelId : undefined,
     };
   });
-  const proxy = new ProxyService(upstream, [throughput, accounting, ...options.interceptors ?? []], events);
+  const proxy = new ProxyService(upstream, [throughput, accounting, ...options.interceptors ?? []], events,
+    () => store.getSettings().anthropicMode ?? 'passthrough');
   const hub = new HuggingFace(store, options.hub);
   const app = express();
   app.disable('x-powered-by');

@@ -156,9 +156,40 @@ continues to use the current managed process's port until it stops.
 | OpenAI | `/v1/chat/completions`, `/v1/responses`, `/v1/embeddings` | Protocol-preserving forwarding |
 | Anthropic | `/v1/messages` | Protocol-preserving forwarding |
 
-The upstream must implement the requested endpoint and protocol. MCM does
-**not** translate Anthropic messages into OpenAI requests, emulate missing
-endpoints, or replace upstream errors with success responses.
+In the default passthrough mode, the upstream must implement the requested
+endpoint and protocol. MCM does not emulate missing endpoints or replace
+upstream errors with success responses.
+
+### Optional Anthropic-to-OpenAI mode
+
+Choose **Machine settings → Anthropic proxy mode → Translate Anthropic to OpenAI**
+to route `/v1/messages` through the upstream `/v1/chat/completions` endpoint.
+Your client still sends Anthropic requests and receives Anthropic responses.
+The default remains **Passthrough**. This is a machine-local setting, not a
+shared model option.
+
+This mode addresses a llama.cpp protocol limitation: its native Anthropic stream
+does not include per-token timings, and reports output usage only near the end.
+Translation requests native timing updates on the OpenAI-compatible path, observes
+them for the Inference card, and converts the response back to Anthropic events.
+Both streaming and non-streaming messages are supported.
+
+Live PP/TG and token totals still require an upstream that supplies native
+measurements, such as a compatible llama.cpp build. Enabling translation does
+not manufacture live counts for a provider that only reports usage at completion.
+The `/v1/messages/count_tokens` endpoint remains passthrough.
+
+The adapter supports text, base64/URL images, function tools and tool results,
+and enabled/disabled/adaptive thinking. Adaptive requests enable the model's
+thinking mode without imposing a fixed token budget; the underlying model and
+server control reasoning behavior, rather than emulating Anthropic's proprietary
+adaptive policy. Unsupported provider-specific content or options
+(such as hosted tools or document blocks) return an explicit
+error; use passthrough for those features. Cache-control hints, provider metadata,
+and thinking signatures are not carried into the local OpenAI prompt. Translation
+buffers JSON requests up to 2 MiB, but responses stream with bounded event buffers.
+Upstream authentication headers are preserved unchanged; translation does not
+convert an `x-api-key` header into a Bearer token.
 
 Docker/container clients may address the inference proxy using a reachable
 container-facing hostname such as `host.docker.internal:7838` or `mcm:7838`.
@@ -205,8 +236,10 @@ of whether inference is local or remote. The same rows appear in picture-in-pict
 
 In-flight usage is shown in both rows and is persisted once the request ends.
 An upstream that reports usage only at completion cannot provide live counts.
-For llama.cpp streaming requests, request `timings_per_token: true` when supported
-to receive native timing/count updates during generation. MCM never treats a
+For OpenAI-style llama.cpp streaming requests, request `timings_per_token: true`
+when supported to receive native timing/count updates during generation. For
+Anthropic clients, enable the optional translation mode described above; the
+native Anthropic endpoint does not forward that option. MCM never treats a
 text chunk as a token or invents counts for upstreams that omit them.
 
 For managed inference, costs use the active model configuration. With an external

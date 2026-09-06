@@ -16,6 +16,21 @@ beforeEach(async () => {
 afterEach(async () => { await rm(directory, { recursive: true, force: true }); });
 
 describe('private atomic persistence', () => {
+  it('migrates absent translation mode to passthrough and preserves an opt-in across unrelated updates/restarts', async () => {
+    const { anthropicMode: _mode, ...legacy } = store.getSettings();
+    await writeFile(join(directory, 'data/settings.json'), JSON.stringify(legacy));
+    const restored = new Store(join(directory, 'data'));
+    await restored.init();
+    expect(restored.publicSettings().anthropicMode).toBe('passthrough');
+    await restored.saveSettings({ anthropicMode: 'openai' });
+    await restored.saveSettings({ serverPort: 9001 });
+    await restored.saveSettings({ hfToken: 'private-token' });
+    const reopened = new Store(join(directory, 'data'));
+    await reopened.init();
+    expect(reopened.publicSettings().anthropicMode).toBe('openai');
+    await expect(reopened.saveSettings({ anthropicMode: 'invalid' })).rejects.toThrow();
+    expect(reopened.publicSettings().anthropicMode).toBe('openai');
+  });
   it('migrates legacy persisted prices to ordinary overrides without losing explicit zero', async () => {
     await writeFile(join(directory, 'data/workspace.json'), JSON.stringify({
       ...emptyWorkspace(),

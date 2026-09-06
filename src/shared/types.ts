@@ -50,6 +50,7 @@ export interface LocalSettings {
   modelsDirectory: string;
   serverPort: number;
   upstreamUrl: string;
+  anthropicMode?: 'passthrough' | 'openai';
   modelBindings: Record<string, string>;
   hfRepo: string;
   hfToken?: string;

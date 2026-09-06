@@ -6,6 +6,7 @@ import { pipeline } from 'node:stream/promises';
 import type { Request, Response } from 'express';
 import type { Interceptor, OutboundRequest, RequestContext, ResponseContext } from './interceptors';
 import { Events } from './events';
+import { anthropicError, AnthropicStream, AnthropicTranslationError, translateAnthropicRequest, translateOpenAIResponse, upstreamErrorBody } from './anthropic';
 
 const hopHeaders = new Set([
   'connection', 'keep-alive', 'proxy-authenticate', 'proxy-authorization', 'te', 'trailer',
@@ -16,12 +17,17 @@ export function filteredHeaders(headers: IncomingHttpHeaders): OutgoingHttpHeade
   for (const value of String(headers.connection ?? '').split(',')) excluded.add(value.trim().toLowerCase());
   return Object.fromEntries(Object.entries(headers).filter(([key]) => !excluded.has(key.toLowerCase())));
 }
+function translatedJson(response: Response, body: unknown): void {
+  response.setHeader('Content-Type', 'application/json; charset=utf-8');
+  response.end(JSON.stringify(body));
+}
 
 export class ProxyService {
   private pending = new Set<AbortController>();
   private completions = new Set<Promise<void>>();
   private closing = false;
-  constructor(private upstream: () => string, private interceptors: Interceptor[], private events: Events) {}
+  constructor(private upstream: () => string, private interceptors: Interceptor[], private events: Events,
+    private anthropicMode: () => 'passthrough' | 'openai' = () => 'passthrough') {}
   private async observe<K extends keyof Interceptor>(hook: K, ...args: Parameters<NonNullable<Interceptor[K]>>): Promise<void> {
     for (const interceptor of this.interceptors) {
       try {
@@ -45,6 +51,9 @@ export class ProxyService {
     let completed = false;
     let preparing = false;
     const original = new URL(request.originalUrl, 'http://localhost');
+    const translating = this.anthropicMode() === 'openai' && request.method === 'POST' && /^\/v1\/messages\/?$/.test(original.pathname);
+    let translatedModel = '';
+    let translatedStream = false;
     const context: RequestContext = {
       requestId: randomUUID(), protocol: original.pathname === '/v1/messages' || original.pathname.startsWith('/v1/messages/') ? 'anthropic' : 'openai',
       method: request.method, path: request.originalUrl, headers: { ...request.headers }, signal: controller.signal,
@@ -92,10 +101,36 @@ export class ProxyService {
       }
       if (readingBody) await readingBody;
       preparing = false;
+      if (translating) {
+        const encoding = Object.entries(outbound.headers).find(([name]) => name.toLowerCase() === 'content-encoding')?.[1];
+        if (outbound.body === undefined && encoding && encoding !== 'identity') {
+          throw new AnthropicTranslationError('Compressed Anthropic requests are unsupported in translation mode. Send identity-encoded JSON.');
+        }
+        let value: unknown;
+        try {
+          const bytes = outbound.body !== undefined ? Buffer.from(outbound.body) : Buffer.from(await outbound.readBody());
+          if (bytes.byteLength > 2 * 1024 * 1024) throw new Error('body limit');
+          value = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes));
+        } catch { throw new AnthropicTranslationError('Anthropic translation requires valid UTF-8 JSON within the 2 MiB request limit.'); }
+        const translated = translateAnthropicRequest(value);
+        translatedModel = translated.model as string;
+        translatedStream = translated.stream === true;
+        outbound.body = JSON.stringify(translated);
+        if (Buffer.byteLength(outbound.body) > 2 * 1024 * 1024) {
+          throw new AnthropicTranslationError('Translated request exceeds the 2 MiB JSON limit. Reduce prompt or tool content.');
+        }
+        target.pathname = '/v1/chat/completions';
+      }
       const headers = filteredHeaders(Object.fromEntries(Object.entries(outbound.headers).map(([key, value]) => [key.toLowerCase(), value])));
       headers.host = target.host;
       // MCM owns proxy CORS; upstream credentials and protocol-specific headers pass through.
       delete headers.origin;
+      if (translating) {
+        headers['accept-encoding'] = 'identity';
+        headers['content-type'] = 'application/json';
+        headers.accept = translatedStream ? 'text/event-stream' : 'application/json';
+        for (const key of ['content-md5', 'digest']) delete headers[key];
+      }
       const body = outbound.body !== undefined ? Buffer.from(outbound.body) : originalBody;
       if (body !== undefined) {
         headers['content-length'] = String(body.byteLength);
@@ -134,17 +169,62 @@ export class ProxyService {
       for (const key of Object.keys(responseHeaders)) {
         if (key.startsWith('access-control-')) delete responseHeaders[key];
       }
-      response.status(incoming.statusCode ?? 502);
-      for (const [name, value] of Object.entries(responseHeaders)) if (value !== undefined) response.setHeader(name, value);
       const responseContext: ResponseContext = { status: incoming.statusCode ?? 502, headers: incoming.headers };
       await this.observe('onResponse', context, responseContext);
-      response.flushHeaders();
+      if (translating) {
+        for (const key of ['content-length', 'content-encoding', 'content-md5', 'etag', 'digest']) delete responseHeaders[key];
+      }
+      response.status(incoming.statusCode ?? 502);
+      for (const [name, value] of Object.entries(responseHeaders)) if (value !== undefined) response.setHeader(name, value);
+      if (translating) {
+        if (incoming.headers['content-encoding'] && incoming.headers['content-encoding'] !== 'identity') {
+          incoming.destroy();
+          throw new AnthropicTranslationError('Upstream ignored Accept-Encoding: identity. Disable upstream compression for Anthropic translation.',
+            (incoming.statusCode ?? 502) >= 400 ? incoming.statusCode! : 502);
+        }
+      }
       const responseObserver = new Transform({
         transform: (chunk: Buffer, _encoding: BufferEncoding, callback: TransformCallback) => {
           this.observe('onResponseChunk', context, new Uint8Array(chunk)).then(() => callback(null, chunk), callback);
         },
       });
-      await pipeline(incoming, responseObserver, response, { signal: controller.signal });
+      if (!translating) {
+        response.flushHeaders();
+        await pipeline(incoming, responseObserver, response, { signal: controller.signal });
+      } else if ((incoming.statusCode ?? 502) < 400 && translatedStream &&
+        String(incoming.headers['content-type']).includes('text/event-stream')) {
+        response.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+        response.flushHeaders();
+        const translator = new AnthropicStream(translatedModel);
+        try {
+          await pipeline(incoming, responseObserver, source => translator.translate(source), response, { signal: controller.signal });
+        } catch (error) {
+          // [DONE] can precede HTTP EOF; the generator deliberately closes its source.
+          if (!translator.completed || !response.writableFinished || controller.signal.aborted) throw error;
+        }
+        if (translator.failure) throw translator.failure;
+      } else {
+        let size = 0;
+        const chunks: Buffer[] = [];
+        await pipeline(incoming, responseObserver, async source => {
+          for await (const chunk of source) {
+            size += chunk.byteLength;
+            if (size > 2 * 1024 * 1024) throw new AnthropicTranslationError('Upstream JSON exceeds the 2 MiB translation limit.', 502);
+            chunks.push(Buffer.from(chunk));
+          }
+        }, { signal: controller.signal });
+        let payload: unknown;
+        try { payload = JSON.parse(Buffer.concat(chunks).toString('utf8')); }
+        catch {
+          if ((incoming.statusCode ?? 502) < 400) throw new AnthropicTranslationError('Upstream did not return valid OpenAI JSON. Use a compatible llama.cpp server.', 502);
+        }
+        if ((incoming.statusCode ?? 502) >= 400) translatedJson(response, upstreamErrorBody(payload, incoming.statusCode!));
+        else {
+          if (translatedStream) throw new AnthropicTranslationError('Upstream ignored stream:true. A compatible llama.cpp SSE endpoint is required.', 502);
+          try { translatedJson(response, translateOpenAIResponse(payload, translatedModel)); }
+          catch (error) { throw new AnthropicTranslationError(error instanceof AnthropicTranslationError ? error.message : 'Invalid upstream completion.', 502); }
+        }
+      }
       completed = true;
       await requestPiping;
       await this.observe('onComplete', context);
@@ -153,7 +233,12 @@ export class ProxyService {
       request.resume();
       await this.observe('onError', context, error instanceof Error ? error : new Error('Proxy failed.'));
       if (!response.headersSent && !response.destroyed) {
-        response.status(502).json({ error: preparing
+        if (translating) {
+          const status = error instanceof AnthropicTranslationError ? error.status : 502;
+          translatedJson(response.status(status), anthropicError(error instanceof AnthropicTranslationError ? error.message :
+            preparing ? 'Request interceptor preparation failed. Check trusted interceptor configuration.' :
+              'Upstream request failed. Check the compatible llama.cpp server and upstream URL.', status));
+        } else response.status(502).json({ error: preparing
           ? 'Request interceptor preparation failed. Body reads are limited to 2 MiB; check trusted interceptor configuration.'
           : 'Upstream request failed. Check the server status and upstream URL.' });
       } else if (!response.writableEnded) response.destroy();

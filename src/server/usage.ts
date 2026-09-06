@@ -136,6 +136,9 @@ interface Observation {
   cacheCreation: number | null;
   timingInput: number | null;
   timingOutput: number | null;
+  finalOutput?: boolean;
+  finalInput?: boolean;
+  finishedChoice?: boolean;
   incomplete: boolean;
 }
 
@@ -211,6 +214,11 @@ export class UsageInterceptor implements Interceptor {
     const message = object(body.message);
     const usage = object(body.usage) ?? object(response?.usage) ?? object(message?.usage);
     const timings = object(body.timings) ?? object(response?.timings) ?? object(message?.timings);
+    observation.finishedChoice ||= Array.isArray(body.choices) && body.choices.some(value => object(value)?.finish_reason != null);
+    const finalUsage = !observation.parser || observation.finishedChoice || body.type === 'message_delta' ||
+      (Array.isArray(body.choices) && body.choices.length === 0);
+    if (finalUsage && count(usage?.completion_tokens ?? usage?.output_tokens) !== null) observation.finalOutput = true;
+    if (finalUsage && count(usage?.prompt_tokens ?? usage?.input_tokens) !== null) observation.finalInput = true;
     observation.input = maximum(observation.input, usage?.prompt_tokens ?? usage?.input_tokens);
     observation.output = maximum(observation.output, usage?.completion_tokens ?? usage?.output_tokens);
     // Anthropic input_tokens excludes these two disjoint categories. Do not add nested cache breakdowns.
@@ -240,8 +248,10 @@ export class UsageInterceptor implements Interceptor {
       (observation.input ?? 0) + (observation.cacheRead ?? 0) + (observation.cacheCreation ?? 0);
     // API usage includes consumed/cached tokens; timings may cover only evaluated tokens.
     return {
-      inputTokens: input ?? observation.timingInput,
-      outputTokens: observation.output ?? observation.timingOutput,
+      inputTokens: input === 0 && observation.parser && !observation.finalInput ?
+        observation.timingInput ?? 0 : input ?? observation.timingInput,
+      outputTokens: observation.output === 0 && observation.parser && !observation.finalOutput ?
+        observation.timingOutput ?? 0 : observation.output ?? observation.timingOutput,
       pricing: observation.pricing, incomplete: incomplete || observation.incomplete || partialCache,
     };
   }

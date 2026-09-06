@@ -17,6 +17,7 @@ export function SettingsDialog({ settings, workspace, onClose, onSave, busy }: {
     defaultValues: {
       executablePath: settings.executablePath, modelsDirectory: settings.modelsDirectory,
       serverPort: settings.serverPort, upstreamUrl: settings.upstreamUrl,
+      anthropicMode: settings.anthropicMode ?? 'passthrough',
       modelBindings: { ...Object.fromEntries(workspace.models.map(model => [model.id, ''])), ...settings.modelBindings }, hfRepo: settings.hfRepo, hfToken: '', clearHfToken: false,
     },
   });
@@ -47,6 +48,13 @@ export function SettingsDialog({ settings, workspace, onClose, onSave, busy }: {
           if (!value) return true;
           try { const url = new URL(value); return ['http:', 'https:'].includes(url.protocol) || 'Use an HTTP or HTTPS URL.'; } catch { return 'Enter a valid URL.'; }
         } })} aria-invalid={!!form.formState.errors.upstreamUrl} />{form.formState.errors.upstreamUrl && <p role="alert" className="field-error">{form.formState.errors.upstreamUrl.message}</p>}</div>
+      </div>
+      <div className="form-field"><label htmlFor="anthropic-mode">Anthropic proxy mode</label>
+        <select id="anthropic-mode" {...form.register('anthropicMode')}>
+          <option value="passthrough">Passthrough (default)</option>
+          <option value="openai">Translate Anthropic to OpenAI</option>
+        </select>
+        <p className="field-help">Translation routes /v1/messages through the upstream /v1/chat/completions endpoint and requests per-token timings. Use a compatible llama.cpp upstream for live PP/TG and usage. This setting is local and never shared with model configurations.</p>
       </div>
       <div className="form-divider"><div><FolderSearch size={17} /><h3>Local model bindings</h3></div><button type="button" className="text-button" onClick={() => void loadModels()} disabled={discovery.loading}><RefreshCw size={14} className={discovery.loading ? 'spin' : ''} />Refresh models</button></div>
       <p className="field-help">Choose a discovered file for each portable model. Automatic matching uses its GGUF filename.</p>
