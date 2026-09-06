@@ -66,6 +66,20 @@ The editor displays effective values and their source. Settings are grouped
 into Compute, Sampling, Memory & context, and Advanced. Dependency rules are
 evaluated against the effective configuration, including inherited values.
 
+### Token pricing
+
+The **Token pricing** section appears in Base, Group and Model configurations,
+using the same input cards, inheritance badges and **Override / Reset** controls
+as other settings. Input and output prices inherit independently:
+**Model > Group > Base > defaults**. Defaults are **$0.25 per million input
+tokens** and **$2.00 per million output tokens**.
+
+Zero is a valid explicit override; Reset restores the parent's price. Use
+**Save changes** to save pricing with the rest of the configuration. Prices
+are included when sharing, but never sent as llama-server command-line flags.
+Older `basePricing` and model `pricing` metadata are automatically migrated to
+standard configuration overrides. Pricing is no longer edited in Edit details.
+
 Model configurations contain a display name, GGUF **filename** and optional
 model repository identifier. MCM does not automatically download or guess a
 replacement model when a shared filename cannot be resolved locally.
@@ -79,7 +93,13 @@ There are two distinct documents:
 | Workspace | Base, groups, model identities and overrides, schema version | Yes |
 | Machine settings | Executable path, model directory/bindings, ports, upstream URL, HF destination/token | No |
 
-Share links include the **complete workspace** in a URL fragment:
+When a model is selected, sharing defaults to **Selected model only**, including
+its base settings and assigned group so inheritance is preserved. Choose
+**All model configurations** to share the complete workspace. This scope applies
+to links, JSON downloads and Hugging Face pushes. From Base or a group, sharing
+defaults to the whole workspace because no model is selected.
+
+Share links include the chosen configuration snapshot in a URL fragment:
 `http://localhost:7838/#config=...`. A recipient reviews the workspace and
 explicitly confirms replacement. Importing does not launch anything or change
 machine settings. Browser fragments are not sent in the HTTP request.
@@ -146,6 +166,53 @@ headers for an upstream that requires them. The local Hugging Face storage
 token is unrelated and is never injected into inference traffic.
 
 ### Throughput, not hardware graphs
+
+The Inference card also includes **All-time** and **Current session** usage:
+input tokens, output tokens, their combined total, and **Estimated token value**
+in USD. This is the worth of the consumed tokens, not an actual bill, regardless
+of whether inference is local or remote. The same rows appear in picture-in-picture.
+
+- A session is one MCM backend run, not one browser tab or model launch.
+  Reloading the page, reopening PiP, or restarting llama-server does not reset it.
+- All-time totals persist locally across MCM restarts and include the current
+  session. Tracking begins when this feature is first used; prior traffic cannot
+  be reconstructed.
+- Only inference traffic through MCM is counted. Counts come from reported
+  response usage/timings, not token estimates, chunk counts, or PP/TG rates.
+  Requests with missing usage are flagged; unreported tokens cannot be counted.
+  Totals and token value update live as streaming usage/timing reports arrive.
+  Repeated cumulative reports replace the current request's contribution rather
+  than being counted again. On cancellation or failure, only usage
+  already reported by the upstream is retained and marked incomplete.
+- Prices are captured per request. Cost is
+  `(inputTokens * inputUsdPerMillion + outputTokens * outputUsdPerMillion) / 1,000,000`.
+  Changing a model's price affects future requests, not historical totals.
+- Traffic without identifiable model pricing uses Base configuration prices.
+  Older usage recorded before this fallback existed can remain unpriced; those
+  tokens are shown explicitly and excluded from the recorded value. The result
+  uses flat input/output rates, not a provider invoice.
+- Usage history is machine-local and separate from shared configurations.
+  Sharing, importing or deleting a configuration does not export or erase it.
+  It is stored in `usage.json` inside `MCM_DATA_DIR`.
+
+In-flight usage is shown in both rows and is persisted once the request ends.
+An upstream that reports usage only at completion cannot provide live counts.
+For llama.cpp streaming requests, request `timings_per_token: true` when supported
+to receive native timing/count updates during generation. MCM never treats a
+text chunk as a token or invents counts for upstreams that omit them.
+
+For managed inference, costs use the active model configuration. With an external
+upstream, the outgoing request's `model` must unambiguously match a configuration's
+ID, display name, GGUF filename, or model repository to use model-specific pricing.
+Unknown or ambiguous models use Base configuration pricing. Explicit API usage takes precedence over native timing
+counts, which may describe only evaluated tokens. Anthropic cache-read and
+cache-creation input counts are included once and use the same configured input
+rate; separate cache pricing tiers are not modeled.
+
+An explicit Upstream URL pointing to the managed server's current HTTP port at
+`localhost` or `127.0.0.1` also uses the active model's pricing. A different
+upstream still requires an unambiguous model match to override Base pricing.
+Historical **Unpriced** values do not mean the tokens were free.
 
 Request-specific timings take precedence over server-wide polling once available.
 Partial timing events retain previously measured rates for that request; zero-token

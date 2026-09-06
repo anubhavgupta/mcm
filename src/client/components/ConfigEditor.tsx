@@ -1,6 +1,6 @@
 import { useEffect } from 'react';
 import { Controller, useForm, useWatch } from 'react-hook-form';
-import { ArrowDown, Check, CircleHelp, Cpu, FlaskConical, Gauge, HardDrive, RotateCcw, Save, SlidersHorizontal } from 'lucide-react';
+import { ArrowDown, Check, CircleHelp, Cpu, DollarSign, FlaskConical, Gauge, HardDrive, RotateCcw, Save, SlidersHorizontal } from 'lucide-react';
 import { catalog, defaults, fieldError, fieldSupported, isFieldEnabled } from '../../shared/config';
 import type { Capabilities, SettingValue, Values, Workspace } from '../../shared/types';
 import type { Selection } from './Sidebar';
@@ -62,7 +62,7 @@ export function ConfigEditor({ workspace, selection, capabilities, onDirty, onSa
       {catalog.sections.map(section => <a key={section.id} href={`#section-${section.id}`} onClick={event => { event.preventDefault(); document.getElementById(`section-${section.id}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }}>{section.title}</a>)}
     </div>
     {catalog.sections.map(section => {
-      const Icon = section.id === 'compute' ? icons.compute : section.id === 'sampling' ? icons.sampling : section.id === 'memory' ? icons.memory : icons.advanced;
+      const Icon = section.id === 'compute' ? icons.compute : section.id === 'sampling' ? icons.sampling : section.id === 'memory' ? icons.memory : section.id === 'pricing' ? DollarSign : icons.advanced;
       return <section className="settings-section" id={`section-${section.id}`} key={section.id} aria-labelledby={`heading-${section.id}`}>
         <div className="section-header"><div className={`section-icon ${section.id}`}><Icon size={19} /></div><div><h2 id={`heading-${section.id}`}>{section.title}</h2><p>{section.description}</p></div></div>
         <div className="fields-grid">

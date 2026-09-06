@@ -1,5 +1,5 @@
 import type { Response } from 'express';
-import type { ManagerEvent, ServerStatus } from '../shared/types';
+import type { ManagerEvent, ServerStatus, UsageSummary } from '../shared/types';
 
 export class Events {
   private sequence = 0;
@@ -21,7 +21,7 @@ export class Events {
     if (response.writableLength > 256 * 1024) { response.destroy(); return; }
     response.write(`id: ${id}\ndata: ${JSON.stringify(event)}\n\n`);
   }
-  connect(response: Response, status: ServerStatus, lastId?: string): void {
+  connect(response: Response, status: ServerStatus, lastId?: string, usage?: UsageSummary): void {
     response.status(200).set({ 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive', 'X-Accel-Buffering': 'no' });
     response.flushHeaders();
     const cursor = lastId && /^\d+$/.test(lastId) ? Number(lastId) : undefined;
@@ -29,6 +29,7 @@ export class Events {
       if (cursor !== undefined ? entry.id > cursor : entry.event.type === 'log') this.write(response, entry.id, entry.event);
     }
     response.write(`data: ${JSON.stringify({ type: 'status', data: status })}\n\n`);
+    if (usage) response.write(`data: ${JSON.stringify({ type: 'usage', data: usage })}\n\n`);
     this.clients.add(response);
     const timer = setInterval(() => {
       if (response.writableLength > 256 * 1024) response.destroy();

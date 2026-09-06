@@ -25,7 +25,10 @@ export interface OutboundRequest {
 export interface Interceptor {
   beforeRequest?(context: RequestContext, outbound: OutboundRequest): void | Promise<void>;
   onRequest?(context: RequestContext): void | Promise<void>;
+  /** Observes the final headers/body after all beforeRequest mutations, without modifying traffic. */
+  onOutboundRequest?(context: RequestContext, headers: RequestContext['headers']): void | Promise<void>;
   onRequestChunk?(context: RequestContext, chunk: Uint8Array): void | Promise<void>;
+  onRequestEnd?(context: RequestContext): void | Promise<void>;
   onResponse?(context: RequestContext, response: ResponseContext): void | Promise<void>;
   onResponseChunk?(context: RequestContext, chunk: Uint8Array): void | Promise<void>;
   onComplete?(context: RequestContext): void | Promise<void>;

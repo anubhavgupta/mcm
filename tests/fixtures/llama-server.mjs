@@ -41,10 +41,13 @@ const server = http.createServer(async (req, res) => {
         ? { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'Hello' } }
         : { choices: [{ index: 0, delta: { content: 'Hello' } }] };
       res.write(`data: ${JSON.stringify(first)}\n\n`);
+      if (input.timings_per_token) {
+        res.write(`data: ${JSON.stringify({ timings: { ...timings, predicted_n: 1 } })}\n\n`);
+      }
       const timer = setTimeout(() => {
         res.write(`data: ${JSON.stringify({ timings })}\n\n`);
         res.end(anthropic ? 'event: message_stop\ndata: {"type":"message_stop"}\n\n' : 'data: [DONE]\n\n');
-      }, 60);
+      }, input.timings_per_token ? 4000 : 60);
       res.on('close', () => clearTimeout(timer));
     } else {
       res.setHeader('Content-Type', 'application/json');

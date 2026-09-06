@@ -33,6 +33,55 @@ origin; production serves `dist/client`.
 
 ## Workspace example
 
+Pricing uses the regular configuration value maps at every level:
+
+```json
+{
+  "values": {
+    "inputUsdPerMillion": 1.5,
+    "outputUsdPerMillion": 6
+  }
+}
+```
+
+Set these keys in `base`, `groups[].values`, or `models[].values`. Each price
+is optional and inherits independently through Model > Group > Base > defaults.
+Rates must be finite numbers between 0 and 1,000,000. Zero is a valid override.
+Defaults are `inputUsdPerMillion: 0.25` and `outputUsdPerMillion: 2`.
+Pricing values are catalog-driven but have no CLI flags.
+
+Legacy `basePricing` and `models[].pricing` objects are accepted on load/import
+and migrated into the corresponding value maps. Explicit new-style values win
+if both formats are present. Exported/saved workspaces use only the value maps.
+
+## Usage accounting
+
+Bootstrap includes a `usage` snapshot, also delivered in `usage` event envelopes.
+`GET /api/usage` returns the same snapshot. New SSE connections receive the latest
+snapshot even without a replay cursor.
+It contains `allTime` and `session` totals with input/output counts, `costUsd`
+(null when no priced usage is recorded), `unpricedTokens`, `requestCount`, and
+`missingUsageRequests`. `sessionId`/`sessionStartedAt` identify this MCM backend
+run; `trackingStartedAt` identifies the beginning of persistent accounting.
+An optional `error` surfaces an accounting failure rather than claiming the
+displayed history is fully saved.
+
+All-time totals include the current session. Clients must replace their displayed
+snapshot on each event, not add the event counts together. Browser refreshes and
+event replay do not create new usage.
+Accounting is finalized once per inference request on completion or failure.
+Usage snapshots include the latest reported contribution of each active request;
+repeated cumulative streaming usage messages replace that contribution, not add
+to it. Completion moves it into persistent totals without counting it twice.
+Active requests are not labeled incomplete merely because generation is ongoing.
+Partial or missing
+counts are flagged; data that was never reported cannot be reconstructed.
+`costUsd` represents estimated token value, not an actual charge. Model-specific
+prices take precedence; unknown, ambiguous or unpriced models use snapshotted
+Base pricing. Pricing edits do not retroactively change recorded history.
+
+## Complete workspace
+
 ```json
 {
   "version": 1,
@@ -59,7 +108,11 @@ inheritance. PUT replaces the workspace as one validated document.
 
 ## Links and imports
 
-Deep-links use `#config=<payload>` with the complete workspace. Import must be
+Deep-links use `#config=<payload>` with a schema-valid workspace snapshot: either
+all models or a selected model plus its base settings and assigned group.
+`POST /api/hf/push` accepts optional `modelId` alongside `repo` to upload the
+same selected-model snapshot; omitting `modelId` retains full-workspace uploads.
+Missing model IDs are rejected. Import must be
 reviewed and confirmed; it never auto-launches. The separate HF shortcut
 `#hf=<owner/repo>` fetches a preview and likewise never auto-imports.
 
@@ -124,7 +177,9 @@ root; `examples/request-tag.ts` provides a ready-to-run version.
 |---|---|
 | `beforeRequest(context, outbound)` | Modify outgoing request headers or deliberately replace its body |
 | `onRequest(context)` | Observe request metadata |
+| `onOutboundRequest(context, headers)` | Observe final outgoing headers after request-modifying hooks |
 | `onRequestChunk(context, bytes)` | Observe a copy of an outgoing request chunk |
+| `onRequestEnd(context)` | Observe completion of the outgoing request body |
 | `onResponse(context, response)` | Observe upstream response status and headers |
 | `onResponseChunk(context, bytes)` | Observe a copy of an incoming response chunk |
 | `onComplete(context)` | Observe successful completion |
@@ -158,5 +213,5 @@ const server = runtime.app.listen(7838, '127.0.0.1');
 // remaining HTTP connections. The normal entrypoint manages this lifecycle.
 ```
 
-The factory returns `app`, `store`, `manager`, `events`, and `close`.
+The factory returns `app`, `store`, `manager`, `events`, `usage`, and `close`.
 It does not bind a port or initialize Vite, which keeps API tests isolated.

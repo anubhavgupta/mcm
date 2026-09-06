@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createServer, request as httpRequest, type Server, type RequestListener } from 'node:http';
 import { randomUUID } from 'node:crypto';
-import { resolve } from 'node:path';
-import { rm } from 'node:fs/promises';
+import { join, resolve } from 'node:path';
+import { mkdir, rm } from 'node:fs/promises';
 import { once } from 'node:events';
 import type { AddressInfo } from 'node:net';
 import { createApp } from './app';
@@ -388,5 +388,179 @@ describe('streaming protocol passthrough', () => {
       request.end();
     });
     await vi.waitFor(() => expect(closed).toBe(true));
+  });
+});
+
+describe('inference accounting API integration', () => {
+  const pricedModel = {
+    id: 'priced', name: 'Priced', model: { filename: 'priced.gguf' }, values: {},
+    pricing: { inputUsdPerMillion: 2, outputUsdPerMillion: 4 },
+  };
+  it('publishes live counters while the upstream SSE connection is still open', async () => {
+    let upstreamResponse: import('node:http').ServerResponse | undefined;
+    const upstream = await listen(async (request, response) => {
+      for await (const _chunk of request) { /* Drain request before streaming. */ }
+      upstreamResponse = response;
+      response.writeHead(200, { 'Content-Type': 'text/event-stream' });
+      response.write('data: {"usage":{"prompt_tokens":5,"completion_tokens":1}}\n\n');
+    });
+    const base = await app(upstream);
+    const response = await fetch(`${base}/v1/chat/completions`, { method: 'POST', body: '{}' });
+    const reader = response.body!.getReader();
+    await reader.read();
+    const live = await (await fetch(`${base}/api/usage`)).json();
+    expect(live.session).toMatchObject({ inputTokens: 5, outputTokens: 1, requestCount: 1 });
+    expect(live.allTime).toEqual(live.session);
+    expect(upstreamResponse!.writableEnded).toBe(false);
+    upstreamResponse!.write('data: {"usage":{"completion_tokens":4}}\n\n');
+    await vi.waitFor(() => expect(runtime!.usage.getSummary().session.outputTokens).toBe(4));
+    upstreamResponse!.end('data: [DONE]\n\n');
+    while (!(await reader.read()).done) { /* Finish response. */ }
+    await runtime!.close();
+    const final = runtime!.usage.getSummary();
+    expect(final.session).toMatchObject({ inputTokens: 5, outputTokens: 4, requestCount: 1 });
+    runtime = await createApp({ dataDir: directory });
+    expect(runtime.usage.getSummary().allTime).toEqual(final.allTime);
+  });
+  it('counts concurrent real responses, serves bootstrap and fresh/reconnected SSE snapshots without recounting', async () => {
+    const upstream = await listen(async (request, response) => {
+      for await (const _chunk of request) { /* Drain the unmodified request. */ }
+      response.setHeader('Content-Type', 'application/json');
+      response.end('{"response":{"usage":{"input_tokens":3,"output_tokens":2}}}');
+    });
+    const base = await app(upstream);
+    await runtime!.store.saveWorkspace({ ...emptyWorkspace(), models: [pricedModel] });
+    await Promise.all(Array.from({ length: 5 }, async () => {
+      const response = await fetch(`${base}/v1/responses`, { method: 'POST', body: '{"model":"priced"}' });
+      expect(await response.text()).toContain('"input_tokens":3');
+    }));
+    await vi.waitFor(() => expect(runtime!.usage.getSummary().session.requestCount).toBe(5));
+    const usage = await (await fetch(`${base}/api/usage`)).json();
+    expect(usage.session).toMatchObject({ inputTokens: 15, outputTokens: 10, requestCount: 5, missingUsageRequests: 0 });
+    expect(usage.session.costUsd).toBeCloseTo(0.00007);
+    expect(usage.allTime).toEqual(usage.session);
+    expect((await (await fetch(`${base}/api/bootstrap`)).json()).usage).toEqual(usage);
+    for (const lastId of [undefined, '0', '99999']) {
+      const controller = new AbortController();
+      const response = await fetch(`${base}/api/events`, { signal: controller.signal, headers: lastId ? { 'Last-Event-ID': lastId } : {} });
+      const reader = response.body!.getReader();
+      const text = new TextDecoder().decode((await reader.read()).value);
+      expect(text).toContain(`data: ${JSON.stringify({ type: 'usage', data: usage })}`);
+      controller.abort();
+      await reader.cancel().catch(() => {});
+    }
+    expect(runtime!.usage.getSummary().session.requestCount).toBe(5);
+    await runtime!.close();
+    runtime = await createApp({ dataDir: directory });
+    expect(runtime.usage.getSummary().allTime).toEqual(usage.allTime);
+    expect(runtime.usage.getSummary().session.requestCount).toBe(0);
+  });
+  it('observes the outbound model after every beforeRequest hook, without using the original model', async () => {
+    let sent = '';
+    const upstream = await listen(async (request, response) => {
+      for await (const chunk of request) sent += chunk.toString();
+      response.setHeader('Content-Type', 'application/json');
+      response.end('{"usage":{"prompt_tokens":1000000,"completion_tokens":1000000}}');
+    });
+    const base = await app(upstream, [
+      { beforeRequest: (_context, outbound) => { outbound.body = '{"model":"wrong"}'; } },
+      { beforeRequest: (_context, outbound) => { outbound.body = '{"model":"priced"}'; } },
+    ]);
+    await runtime!.store.saveWorkspace({
+      ...emptyWorkspace(), models: [pricedModel, { ...pricedModel, id: 'wrong', pricing: { inputUsdPerMillion: 100, outputUsdPerMillion: 100 } }],
+    });
+    await (await fetch(`${base}/v1/chat/completions`, { method: 'POST', body: '{"model":"wrong"}' })).text();
+    await vi.waitFor(() => expect(runtime!.usage.getSummary().session.requestCount).toBe(1));
+    expect(sent).toBe('{"model":"priced"}');
+    expect(runtime!.usage.getSummary().session.costUsd).toBe(6);
+  });
+  it('accounts Anthropic SSE cache usage and repeated deltas without changing streamed bytes', async () => {
+    const text = 'event: message_start\ndata: {"type":"message_start","message":{"usage":{"input_tokens":8,"output_tokens":0,"cache_read_input_tokens":10,"cache_creation_input_tokens":2}}}\n\n' +
+      'event: message_delta\ndata: {"type":"message_delta","usage":{"output_tokens":4}}\n\n' +
+      'event: message_delta\ndata: {"type":"message_delta","usage":{"output_tokens":4}}\n\n' +
+      'event: message_stop\ndata: {"type":"message_stop"}\n\n';
+    const upstream = await listen(async (request, response) => {
+      for await (const _chunk of request) { /* Drain the unmodified request. */ }
+      response.setHeader('Content-Type', 'text/event-stream');
+      for (const byte of Buffer.from(text)) response.write(Buffer.of(byte));
+      response.end();
+    });
+    const base = await app(upstream);
+    await runtime!.store.saveWorkspace({ ...emptyWorkspace(), models: [pricedModel] });
+    const response = await fetch(`${base}/v1/messages`, { method: 'POST', body: '{"model":"priced"}' });
+    expect(await response.text()).toBe(text);
+    await vi.waitFor(() => expect(runtime!.usage.getSummary().session.requestCount).toBe(1));
+    expect(runtime!.usage.getSummary().session).toMatchObject({ inputTokens: 20, outputTokens: 4, missingUsageRequests: 0, unpricedTokens: 0 });
+    expect(runtime!.usage.getSummary().session.costUsd).toBeCloseTo(0.000056);
+  });
+  it('uses managed pricing for default or equivalent explicit upstreams, but not a different server', async () => {
+    const handler: RequestListener = async (request, response) => {
+      for await (const _chunk of request) { /* Drain the unmodified request. */ }
+      response.setHeader('Content-Type', 'application/json');
+      response.end('{"usage":{"prompt_tokens":1000000,"completion_tokens":1000000}}');
+    };
+    const upstream = await listen(handler);
+    const external = await listen(handler);
+    const base = await app();
+    await runtime!.store.saveWorkspace({
+      ...emptyWorkspace(), models: [pricedModel, { ...pricedModel, id: 'other', pricing: { inputUsdPerMillion: 10, outputUsdPerMillion: 10 } }],
+    });
+    vi.spyOn(runtime!.manager, 'getManagedPort').mockReturnValue(Number(new URL(upstream).port));
+    vi.spyOn(runtime!.manager, 'getStatus').mockReturnValue({ phase: 'ready', modelId: 'priced' });
+    await (await fetch(`${base}/v1/chat/completions`, { method: 'POST', body: '{"model":"other"}' })).text();
+    await vi.waitFor(() => expect(runtime!.usage.getSummary().session.costUsd).toBe(6));
+    await runtime!.store.saveSettings({ upstreamUrl: upstream });
+    await (await fetch(`${base}/v1/chat/completions`, { method: 'POST', body: '{"model":"unknown"}' })).text();
+    await vi.waitFor(() => expect(runtime!.usage.getSummary().session.costUsd).toBe(12));
+    expect(runtime!.usage.getSummary().session.unpricedTokens).toBe(0);
+    await runtime!.store.saveSettings({ upstreamUrl: upstream.replace('127.0.0.1', 'localhost') });
+    await (await fetch(`${base}/v1/chat/completions`, { method: 'POST', body: '{"model":"unknown"}' })).text();
+    await vi.waitFor(() => expect(runtime!.usage.getSummary().session.costUsd).toBe(18));
+    await runtime!.store.saveSettings({ upstreamUrl: external });
+    await (await fetch(`${base}/v1/chat/completions`, { method: 'POST', body: '{"model":"other"}' })).text();
+    await vi.waitFor(() => expect(runtime!.usage.getSummary().session.costUsd).toBe(38));
+    await (await fetch(`${base}/v1/chat/completions`, { method: 'POST', body: '{"model":"unknown"}' })).text();
+    await vi.waitFor(() => expect(runtime!.usage.getSummary().session.costUsd).toBeCloseTo(40.25));
+    expect(runtime!.usage.getSummary().session.unpricedTokens).toBe(0);
+  });
+  it.each(['cancel', 'shutdown', 'upstream-error'])('persists partial streamed counts once on %s and waits for accounting during close', async mode => {
+    let finish!: () => void;
+    const first = 'data: {"usage":{"prompt_tokens":8,"completion_tokens":2}}\n\n';
+    const upstream = await listen((_request, response) => {
+      response.writeHead(200, { 'Content-Type': 'text/event-stream' });
+      response.write(first);
+      finish = () => response.destroy();
+    });
+    const base = await app(upstream);
+    const controller = new AbortController();
+    const response = await fetch(`${base}/v1/chat/completions`, { method: 'POST', body: '{}', signal: controller.signal });
+    const reader = response.body!.getReader();
+    expect(Buffer.from((await reader.read()).value!).toString()).toBe(first);
+    if (mode === 'cancel') controller.abort();
+    else if (mode === 'upstream-error') finish();
+    else await runtime!.close();
+    await reader.cancel().catch(() => {});
+    await vi.waitFor(() => expect(runtime!.usage.getSummary().session.missingUsageRequests).toBe(1));
+    expect(runtime!.usage.getSummary().session).toMatchObject({ inputTokens: 8, outputTokens: 2, missingUsageRequests: 1, unpricedTokens: 0 });
+    expect(runtime!.usage.getSummary().session.costUsd).toBeCloseTo(0.000006, 10);
+    await runtime!.close();
+    runtime = await createApp({ dataDir: directory });
+    expect(runtime.usage.getSummary().allTime).toMatchObject({ inputTokens: 8, outputTokens: 2, requestCount: 1, missingUsageRequests: 1 });
+  });
+  it('keeps protocol bytes untouched while publishing durable-storage errors visibly in the API/events and close', async () => {
+    const upstream = await listen((_request, response) => {
+      response.setHeader('Content-Type', 'application/json');
+      response.end('{"usage":{"prompt_tokens":8,"completion_tokens":2}}');
+    });
+    const base = await app(upstream);
+    const emit = vi.spyOn(runtime!.events, 'emit');
+    await rm(join(directory, 'usage.json'));
+    await mkdir(join(directory, 'usage.json'));
+    const response = await fetch(`${base}/v1/chat/completions`, { method: 'POST', body: '{}' });
+    expect(await response.text()).toBe('{"usage":{"prompt_tokens":8,"completion_tokens":2}}');
+    await vi.waitFor(() => expect(runtime!.usage.getSummary().error).toContain('could not be saved'));
+    expect((await (await fetch(`${base}/api/usage`)).json()).error).toContain('could not be saved');
+    expect(emit.mock.calls.some(([event]) => event.type === 'usage' && event.data.error)).toBe(true);
+    await expect(runtime!.close()).rejects.toThrow('could not be saved');
   });
 });

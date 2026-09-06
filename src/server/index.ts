@@ -11,7 +11,7 @@ async function loadInterceptors(): Promise<Interceptor[]> {
   const module = await import(pathToFileURL(modulePath).href) as { default?: Interceptor | Interceptor[]; interceptors?: Interceptor[] };
   const exported = module.interceptors ?? module.default;
   const interceptors = Array.isArray(exported) ? exported : [exported];
-  const hooks = ['beforeRequest', 'onRequest', 'onRequestChunk', 'onResponse', 'onResponseChunk', 'onComplete', 'onError'] as const;
+  const hooks = ['beforeRequest', 'onRequest', 'onOutboundRequest', 'onRequestChunk', 'onRequestEnd', 'onResponse', 'onResponseChunk', 'onComplete', 'onError'] as const;
   if (interceptors.some(value => !value || typeof value !== 'object' ||
     hooks.some(key => value[key] !== undefined && typeof value[key] !== 'function'))) {
     throw new Error('Interceptor module must export an interceptors array or default-export Interceptor objects.');
@@ -42,9 +42,14 @@ async function main(): Promise<void> {
     if (closing) return;
     closing = true;
     server.close();
-    await runtime.close();
-    await vite?.close();
-    server.closeAllConnections();
+    try { await runtime.close(); }
+    catch {
+      console.error('MCM shutdown could not flush usage history. Check data-directory permissions and free space.');
+      process.exitCode = 1;
+    } finally {
+      await vite?.close();
+      server.closeAllConnections();
+    }
   };
   process.once('SIGINT', () => { void shutdown(); });
   process.once('SIGTERM', () => { void shutdown(); });

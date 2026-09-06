@@ -24,16 +24,24 @@ export interface Catalog {
   fields: SettingField[];
 }
 export interface ConfigGroup { id: string; name: string; values: Values }
+export interface ModelPricing {
+  inputUsdPerMillion: number;
+  outputUsdPerMillion: number;
+}
 export interface ModelConfig {
   id: string;
   name: string;
   model: { filename: string; repo?: string };
   groupId?: string;
   values: Values;
+  /** Legacy input; workspace validation migrates it to values. */
+  pricing?: ModelPricing;
 }
 export interface Workspace {
   version: 1;
   base: Values;
+  /** Legacy input; workspace validation migrates it to base. */
+  basePricing?: ModelPricing;
   groups: ConfigGroup[];
   models: ModelConfig[];
 }
@@ -63,12 +71,30 @@ export interface Throughput {
   measurement?: 'timings' | 'prometheus';
   active: boolean;
 }
+export interface UsageTotals {
+  inputTokens: number;
+  outputTokens: number;
+  costUsd: number | null;
+  unpricedTokens: number;
+  requestCount: number;
+  missingUsageRequests: number;
+}
+export interface UsageSummary {
+  allTime: UsageTotals;
+  session: UsageTotals;
+  sessionId: string;
+  sessionStartedAt: string;
+  trackingStartedAt: string;
+  error?: string;
+}
 export type ManagerEvent =
   | { type: 'status'; data: ServerStatus }
   | { type: 'log'; data: LogEntry }
-  | { type: 'throughput'; data: Throughput };
+  | { type: 'throughput'; data: Throughput }
+  | { type: 'usage'; data: UsageSummary };
 export interface Bootstrap {
   workspace: Workspace;
   settings: PublicSettings;
   status: ServerStatus;
+  usage: UsageSummary;
 }

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { emptyWorkspace } from '../../src/shared/config';
-import { createShareUrl, decodeWorkspace, encodeWorkspace } from '../../src/shared/sharing';
+import { createShareUrl, decodeWorkspace, encodeWorkspace, modelWorkspace } from '../../src/shared/sharing';
+import { resolveConfig } from '../../src/shared/config';
 import type { Workspace } from '../../src/shared/types';
 
 const workspace: Workspace = {
@@ -15,6 +16,20 @@ const workspace: Workspace = {
 };
 
 describe('portable deep-links', () => {
+  it('shares only a selected model and its ancestors without changing effective values', () => {
+    const full: Workspace = {
+      ...workspace,
+      groups: [...workspace.groups, { id: 'other', name: 'Other', values: {} }],
+      models: [...workspace.models, { id: 'other', name: 'Other', model: { filename: 'other.gguf' }, values: {} }],
+    };
+    const selected = modelWorkspace(full, 'model');
+    expect(selected.models).toEqual([workspace.models[0]]);
+    expect(selected.groups).toEqual(workspace.groups);
+    expect(resolveConfig(selected, selected.models[0])).toEqual(resolveConfig(full, full.models[0]));
+    expect(modelWorkspace(full, 'other').groups).toEqual([]);
+    expect(full.models).toHaveLength(2);
+    expect(() => modelWorkspace(full, 'missing')).toThrow('not found');
+  });
   it('round-trips the entire hierarchy and unicode labels', () => {
     expect(decodeWorkspace(encodeWorkspace(workspace))).toEqual(workspace);
   });

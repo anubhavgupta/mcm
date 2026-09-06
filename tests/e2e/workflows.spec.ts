@@ -2,7 +2,7 @@ import { createServer } from 'node:net';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
-import { encodeWorkspace } from '../../src/shared/sharing';
+import { decodeWorkspace, encodeWorkspace } from '../../src/shared/sharing';
 import type { Bootstrap, Workspace } from '../../src/shared/types';
 
 const fixture: Workspace = {
@@ -219,6 +219,37 @@ test('JSON backup excludes machine settings and can be imported with review', as
   await expect.poll(async () => (await bootstrap(request)).workspace.base).toEqual(imported.base);
 });
 
+test('sharing defaults to the selected model with an explicit all-configurations option', async ({ page, request }) => {
+    await jsonPut(request, '/api/workspace', {
+      ...fixture,
+      models: [...fixture.models, { id: 'other', name: 'Other model', model: { filename: 'other.gguf' }, values: {} }],
+      groups: [...fixture.groups, { id: 'unused', name: 'Unused group', values: {} }],
+    });
+    await page.goto('/');
+    await selectModel(page);
+    await page.getByRole('button', { name: 'Share', exact: true }).click();
+    const scope = page.getByRole('combobox', { name: 'Share scope', exact: true });
+    await expect(scope).toHaveValue('model');
+    const link = page.getByRole('textbox', { name: 'Workspace share link', exact: true });
+    const shared = decodeWorkspace(new URL(await link.inputValue()).hash.slice(8));
+    expect(shared).toEqual(fixture);
+    const downloaded = page.waitForEvent('download');
+    await page.getByRole('button', { name: 'Download JSON', exact: true }).click();
+    const file = await downloaded;
+    expect(JSON.parse(await readFile((await file.path())!, 'utf8'))).toEqual(fixture);
+    let pushed: unknown;
+    await page.route('**/api/hf/push', route => {
+      pushed = route.request().postDataJSON();
+      return route.fulfill({ json: { url: 'https://huggingface.co/datasets/example/configs/blob/main/mcm/workspace.json' } });
+    });
+    await page.getByRole('textbox', { name: 'Dataset repository', exact: true }).fill('example/configs');
+    page.once('dialog', dialog => dialog.accept());
+    await page.getByRole('button', { name: 'Push workspace', exact: true }).click();
+    await expect.poll(() => pushed).toEqual({ repo: 'example/configs', modelId: 'tiny' });
+    await scope.selectOption('workspace');
+    await expect.poll(async () => decodeWorkspace(new URL(await link.inputValue()).hash.slice(8)).models.length).toBe(2);
+});
+
 test('launch, proxy inference, and stop work through the UI', async ({ page, request }) => {
   await page.goto('/');
   await selectModel(page);
@@ -238,6 +269,161 @@ test('launch, proxy inference, and stop work through the UI', async ({ page, req
   await expect.poll(async () => (await bootstrap(request)).status.phase, { timeout: 15_000 }).toBe('ready');
   await page.getByRole('button', { name: 'Stop server', exact: true }).click();
   await expect.poll(async () => (await bootstrap(request)).status.phase).toBe('stopped');
+});
+
+test('records model-priced usage and keeps totals after reloading the page', async ({ page, request }) => {
+  await page.goto('/');
+  await selectModel(page);
+  await page.getByRole('button', { name: 'Override Input price (USD / 1M tokens)', exact: true }).click();
+  await page.getByRole('button', { name: 'Override Output price (USD / 1M tokens)', exact: true }).click();
+  await page.getByRole('spinbutton', { name: 'Input price (USD / 1M tokens)', exact: true }).fill('1.5');
+  await page.getByRole('spinbutton', { name: 'Output price (USD / 1M tokens)', exact: true }).fill('6');
+  await page.getByRole('button', { name: 'Save changes', exact: true }).click();
+  await expect.poll(async () => (await bootstrap(request)).workspace.models[0].values)
+    .toMatchObject({ inputUsdPerMillion: 1.5, outputUsdPerMillion: 6 });
+  const before = (await bootstrap(request)).usage;
+  await page.getByRole('button', { name: 'Launch model', exact: true }).click();
+  await expect.poll(async () => (await bootstrap(request)).status.phase).toBe('ready');
+  for (const stream of [false, true]) {
+    const response = await request.post('/v1/chat/completions', {
+      data: { model: 'mock-model', messages: [{ role: 'user', content: 'Hello' }], stream },
+    });
+    expect(response.ok()).toBe(true);
+    await response.body();
+  }
+  await expect.poll(async () => (await bootstrap(request)).usage.allTime.requestCount)
+    .toBe(before.allTime.requestCount + 2);
+  const after = (await bootstrap(request)).usage;
+  for (const scope of ['allTime', 'session'] as const) {
+    expect(after[scope].inputTokens - before[scope].inputTokens).toBe(20);
+    expect(after[scope].outputTokens - before[scope].outputTokens).toBe(4);
+    expect(after[scope].costUsd! - (before[scope].costUsd ?? 0)).toBeCloseTo(0.000054, 10);
+  }
+  const allTime = page.getByRole('region', { name: 'All-time usage', exact: true });
+  const session = page.getByRole('region', { name: 'Current session usage', exact: true });
+  await expect(allTime.locator('dd').nth(2)).toHaveText((after.allTime.inputTokens + after.allTime.outputTokens).toLocaleString());
+  await expect(session.locator('.usage-cost strong')).toHaveText(new Intl.NumberFormat('en-US', {
+    style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 6,
+  }).format(after.session.costUsd!));
+  await page.reload();
+  await expect(page.getByRole('region', { name: 'All-time usage', exact: true }).locator('dd').nth(2))
+    .toHaveText((after.allTime.inputTokens + after.allTime.outputTokens).toLocaleString());
+  expect((await bootstrap(request)).usage).toEqual(after);
+});
+
+test('pricing overrides validate amounts, preserve zero and reset to inheritance', async ({ page, request }) => {
+  await page.goto('/');
+  await selectModel(page);
+  const input = page.getByRole('spinbutton', { name: 'Input price (USD / 1M tokens)', exact: true });
+  await expect(input).toBeDisabled();
+  await page.getByRole('button', { name: 'Override Input price (USD / 1M tokens)', exact: true }).click();
+  await input.fill('-1');
+  await page.getByRole('button', { name: 'Save changes', exact: true }).click();
+  await expect(page.getByRole('alert')).toContainText('Minimum is 0');
+  await input.fill('0');
+  await page.getByRole('button', { name: 'Save changes', exact: true }).click();
+  await expect.poll(async () => (await bootstrap(request)).workspace.models[0].values.inputUsdPerMillion).toBe(0);
+  await page.getByRole('button', { name: 'Reset Input price (USD / 1M tokens) to inherited', exact: true }).click();
+  await expect(input).toHaveValue('0.25');
+  await expect(input).toBeDisabled();
+  await page.getByRole('button', { name: 'Save changes', exact: true }).click();
+  await expect.poll(async () => (await bootstrap(request)).workspace.models[0].values.inputUsdPerMillion).toBeUndefined();
+  await page.getByRole('button', { name: 'Edit details', exact: true }).click();
+  await expect(page.getByRole('dialog').getByRole('spinbutton')).toHaveCount(0);
+});
+
+test('base token prices provide a configurable fallback for a model without pricing', async ({ page, request }) => {
+  await page.goto('/');
+  const input = page.getByRole('spinbutton', { name: 'Input price (USD / 1M tokens)', exact: true });
+  const output = page.getByRole('spinbutton', { name: 'Output price (USD / 1M tokens)', exact: true });
+  await expect(input).toHaveValue('0.25');
+  await expect(output).toHaveValue('2');
+  await page.getByRole('button', { name: 'Override Input price (USD / 1M tokens)', exact: true }).click();
+  await page.getByRole('button', { name: 'Override Output price (USD / 1M tokens)', exact: true }).click();
+  await input.fill('0.5');
+  await output.fill('3');
+  await page.getByRole('button', { name: 'Save changes', exact: true }).click();
+  await expect.poll(async () => (await bootstrap(request)).workspace.base)
+    .toMatchObject({ inputUsdPerMillion: 0.5, outputUsdPerMillion: 3 });
+  const before = (await bootstrap(request)).usage;
+  await selectModel(page);
+  await page.getByRole('button', { name: 'Launch model', exact: true }).click();
+  await expect.poll(async () => (await bootstrap(request)).status.phase).toBe('ready');
+  const response = await request.post('/v1/chat/completions', {
+    data: { model: 'arbitrary-name', messages: [{ role: 'user', content: 'Hello' }], stream: false },
+  });
+  expect(response.ok()).toBe(true);
+  await expect.poll(async () => (await bootstrap(request)).usage.session.requestCount)
+    .toBe(before.session.requestCount + 1);
+  const after = (await bootstrap(request)).usage;
+  expect(after.session.costUsd! - (before.session.costUsd ?? 0)).toBeCloseTo(0.000011, 10);
+  expect(after.session.unpricedTokens).toBe(before.session.unpricedTokens);
+  await expect(page.getByRole('region', { name: 'Current session usage' })).toContainText('Estimated token value');
+});
+
+test('pricing cards inherit group rates, allow model overrides and apply them to token value', async ({ page, request }) => {
+  await jsonPut(request, '/api/workspace', {
+    ...fixture,
+    base: { ...fixture.base, inputUsdPerMillion: 0.5, outputUsdPerMillion: 3 },
+    groups: [{ ...fixture.groups[0], values: { ...fixture.groups[0].values, outputUsdPerMillion: 4 } }],
+  });
+  await page.goto('/');
+  await openNavigation(page);
+  await page.getByRole('button', { name: 'Coding', exact: true }).click();
+  const input = page.getByRole('spinbutton', { name: 'Input price (USD / 1M tokens)', exact: true });
+  const output = page.getByRole('spinbutton', { name: 'Output price (USD / 1M tokens)', exact: true });
+  await expect(input).toHaveValue('0.5');
+  await expect(input).toBeDisabled();
+  await expect(output).toHaveValue('4');
+  await expect(output).toBeEnabled();
+  await page.getByRole('button', { name: 'Override Input price (USD / 1M tokens)', exact: true }).click();
+  await input.fill('0.75');
+  await page.getByRole('button', { name: 'Save changes', exact: true }).click();
+  await expect.poll(async () => (await bootstrap(request)).workspace.groups[0].values.inputUsdPerMillion).toBe(0.75);
+  await selectModel(page);
+  await expect(input).toHaveValue('0.75');
+  await expect(output).toHaveValue('4');
+  await expect(output).toBeDisabled();
+  const inputCard = page.locator('.field-card').filter({ has: input });
+  await expect(inputCard.locator('.origin-badge')).toHaveText('Group');
+  await page.getByRole('button', { name: 'Override Input price (USD / 1M tokens)', exact: true }).click();
+  await input.fill('0');
+  await page.getByRole('button', { name: 'Save changes', exact: true }).click();
+  await expect.poll(async () => (await bootstrap(request)).workspace.models[0].values.inputUsdPerMillion).toBe(0);
+  await expect(inputCard.locator('.origin-badge')).toHaveText('Model');
+  const before = (await bootstrap(request)).usage.session;
+  await page.getByRole('button', { name: 'Launch model', exact: true }).click();
+  await expect.poll(async () => (await bootstrap(request)).status.phase).toBe('ready');
+  await request.post('/v1/chat/completions', { data: { messages: [{ role: 'user', content: 'Hello' }], stream: true } });
+  await expect.poll(async () => (await bootstrap(request)).usage.session.requestCount).toBe(before.requestCount + 1);
+  expect((await bootstrap(request)).usage.session.costUsd! - (before.costUsd ?? 0)).toBeCloseTo(0.000008, 10);
+  await page.getByRole('button', { name: 'Reset Input price (USD / 1M tokens) to inherited', exact: true }).click();
+  await expect(input).toHaveValue('0.75');
+  await expect(inputCard.locator('.origin-badge')).toHaveText('Group');
+  await page.getByRole('button', { name: 'Save changes', exact: true }).click();
+});
+
+test('both usage rows update while an inference stream is still running', async ({ page, request }) => {
+  await page.goto('/');
+  await selectModel(page);
+  await expect(page.getByText('Measured throughput, not estimates.', { exact: true })).toHaveCount(0);
+  await page.getByRole('button', { name: 'Launch model', exact: true }).click();
+  await expect.poll(async () => (await bootstrap(request)).status.phase).toBe('ready');
+  const before = (await bootstrap(request)).usage;
+  let finished = false;
+  const responsePromise = request.post('/v1/chat/completions', {
+    data: { messages: [{ role: 'user', content: 'Hello' }], stream: true, timings_per_token: true },
+  }).then(response => { finished = true; return response; });
+  try {
+    for (const [label, scope] of [['All-time usage', 'allTime'], ['Current session usage', 'session']] as const) {
+      const row = page.getByRole('region', { name: label, exact: true });
+      await expect(row.locator('dd').nth(0)).toHaveText((before[scope].inputTokens + 10).toLocaleString());
+      await expect(row.locator('dd').nth(1)).toHaveText((before[scope].outputTokens + 1).toLocaleString());
+    }
+    expect(finished).toBe(false);
+  } finally { await responsePromise; }
+  await expect(page.getByRole('region', { name: 'Current session usage', exact: true }).locator('dd').nth(1))
+    .toHaveText((before.session.outputTokens + 2).toLocaleString());
 });
 
 test('fits the viewport without horizontal overflow', async ({ page }) => {

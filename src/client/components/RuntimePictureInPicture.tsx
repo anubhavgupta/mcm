@@ -44,7 +44,7 @@ export function RuntimePictureInPicture({ children, notify }: {
     }
     setOpening(true);
     try {
-      const child = await window.documentPictureInPicture.requestWindow({ width: 380, height: 300 });
+      const child = await window.documentPictureInPicture.requestWindow({ width: 380, height: 600 });
       if (!mounted.current) { child.close(); return; }
       pip.current = child;
       child.addEventListener('pagehide', () => {

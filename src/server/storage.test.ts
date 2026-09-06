@@ -16,6 +16,25 @@ beforeEach(async () => {
 afterEach(async () => { await rm(directory, { recursive: true, force: true }); });
 
 describe('private atomic persistence', () => {
+  it('migrates legacy persisted prices to ordinary overrides without losing explicit zero', async () => {
+    await writeFile(join(directory, 'data/workspace.json'), JSON.stringify({
+      ...emptyWorkspace(),
+      basePricing: { inputUsdPerMillion: 0.5, outputUsdPerMillion: 3 },
+      models: [{
+        id: 'one', name: 'One', model: { filename: 'one.gguf' }, values: { temperature: 0.6 },
+        pricing: { inputUsdPerMillion: 0, outputUsdPerMillion: 4 },
+      }],
+    }));
+    const restored = new Store(join(directory, 'data'));
+    await restored.init();
+    const workspace = restored.getWorkspace();
+    expect(workspace.base).toEqual({ inputUsdPerMillion: 0.5, outputUsdPerMillion: 3 });
+    expect(workspace.models[0].values).toEqual({ temperature: 0.6, inputUsdPerMillion: 0, outputUsdPerMillion: 4 });
+    expect(workspace).not.toHaveProperty('basePricing');
+    expect(workspace.models[0]).not.toHaveProperty('pricing');
+    await restored.saveWorkspace(workspace);
+    expect(JSON.parse(await readFile(join(directory, 'data/workspace.json'), 'utf8'))).toEqual(workspace);
+  });
   it('skips unsupported Windows directory fsync but retains POSIX errors and durability', async () => {
     const missing = join(directory, 'nonexistent-directory');
     await expect(syncDirectory(missing, 'win32')).resolves.toBeUndefined();

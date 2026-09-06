@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import catalogJson from './catalog.json' with { type: 'json' };
-import type { Catalog, ModelConfig, SettingField, Values, Workspace } from './types';
+import type { Catalog, ModelConfig, ModelPricing, SettingField, Values, Workspace } from './types';
 
 const fieldSchema = z.object({
   key: z.string().regex(/^[a-zA-Z][a-zA-Z0-9]*$/),
@@ -60,6 +60,14 @@ export const valuesSchema = z.record(z.string(), z.union([z.string(), z.number()
 });
 
 const idSchema = z.string().regex(/^[a-zA-Z0-9_-]{1,100}$/);
+export const pricingSchema = z.object({
+  inputUsdPerMillion: z.number().finite().min(0).max(1_000_000),
+  outputUsdPerMillion: z.number().finite().min(0).max(1_000_000),
+}).strict();
+export const defaultPricing: ModelPricing = pricingSchema.parse({
+  inputUsdPerMillion: defaults.inputUsdPerMillion,
+  outputUsdPerMillion: defaults.outputUsdPerMillion,
+});
 export const repoSchema = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]*\/[a-zA-Z0-9][a-zA-Z0-9._-]*$/, 'Use owner/repository.');
 const modelSchema = z.object({
   id: idSchema,
@@ -70,11 +78,13 @@ const modelSchema = z.object({
   }).strict(),
   groupId: idSchema.optional(),
   values: valuesSchema,
+  pricing: pricingSchema.optional(),
 }).strict();
 
 export const workspaceSchema = z.object({
   version: z.literal(1),
   base: valuesSchema,
+  basePricing: pricingSchema.optional(),
   groups: z.array(z.object({ id: idSchema, name: z.string().trim().min(1).max(120), values: valuesSchema }).strict()).max(100),
   models: z.array(modelSchema).max(500),
 }).strict().superRefine((workspace, ctx) => {
@@ -87,7 +97,13 @@ export const workspaceSchema = z.object({
       ctx.addIssue({ code: 'custom', path: ['models'], message: `Missing group for ${model.name}.` });
     }
   }
-});
+}).transform(({ basePricing, ...workspace }) => ({
+  ...workspace,
+  base: { ...basePricing, ...workspace.base },
+  models: workspace.models.map(({ pricing, ...model }) => ({
+    ...model, values: { ...pricing, ...model.values },
+  })),
+}));
 
 export function emptyWorkspace(): Workspace {
   return { version: 1, base: {}, groups: [], models: [] };
@@ -95,7 +111,15 @@ export function emptyWorkspace(): Workspace {
 
 export function resolveConfig(workspace: Workspace, model?: ModelConfig): Values {
   const group = model?.groupId ? workspace.groups.find(item => item.id === model.groupId) : undefined;
-  return { ...defaults, ...workspace.base, ...group?.values, ...model?.values };
+  return { ...defaults, ...workspace.basePricing, ...workspace.base, ...group?.values, ...model?.pricing, ...model?.values };
+}
+
+export function resolvePricing(workspace: Workspace, model?: ModelConfig): ModelPricing {
+  const values = resolveConfig(workspace, model);
+  return pricingSchema.parse({
+    inputUsdPerMillion: values.inputUsdPerMillion,
+    outputUsdPerMillion: values.outputUsdPerMillion,
+  });
 }
 
 export function isFieldEnabled(field: SettingField, values: Values): boolean {

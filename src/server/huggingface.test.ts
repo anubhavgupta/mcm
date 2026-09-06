@@ -6,6 +6,8 @@ import { Store } from './storage';
 import { HuggingFace } from './huggingface';
 import { emptyWorkspace } from '../shared/config';
 import type { uploadFiles } from '@huggingface/hub';
+import { Events } from './events';
+import { UsageStore } from './usage';
 
 let directory: string;
 let store: Store;
@@ -18,6 +20,27 @@ beforeEach(async () => {
 afterEach(async () => { await rm(directory, { recursive: true, force: true }); });
 
 describe('Hugging Face portable workspace exchange', () => {
+  it('uploads only the selected model and its ancestors without changing the local workspace', async () => {
+    await store.saveSettings({ hfToken: 'hf_test' });
+    await store.saveWorkspace({
+      ...emptyWorkspace(), base: { temperature: 0.5 },
+      groups: [{ id: 'group', name: 'Group', values: { threads: 4 } }],
+      models: [
+        { id: 'one', name: 'One', model: { filename: 'one.gguf' }, groupId: 'group', values: {} },
+        { id: 'two', name: 'Two', model: { filename: 'two.gguf' }, values: {} },
+      ],
+    });
+    const upload = vi.fn<typeof uploadFiles>().mockResolvedValue(undefined);
+    const hub = new HuggingFace(store, { upload });
+    await hub.push(undefined, 'one');
+    const file = upload.mock.calls[0]![0].files[0] as { content: Blob };
+    const shared = JSON.parse(await file.content.text());
+    expect(shared.models.map((model: { id: string }) => model.id)).toEqual(['one']);
+    expect(shared.groups).toEqual(store.getWorkspace().groups);
+    expect(shared.base).toEqual({ temperature: 0.5 });
+    expect(store.getWorkspace().models).toHaveLength(2);
+    await expect(hub.push(undefined, 'missing')).rejects.toThrow('not found');
+  });
   it('pulls public repositories without auth and returns a preview without overwriting', async () => {
     const workspace = { ...emptyWorkspace(), base: { temperature: 0.1 } };
     const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify(workspace)));
@@ -42,6 +65,9 @@ describe('Hugging Face portable workspace exchange', () => {
   });
   it('uploads only validated workspace JSON to an existing dataset using the official SDK', async () => {
     await store.saveSettings({ hfToken: 'hf_secret' });
+    const usage = new UsageStore(directory, new Events());
+    await usage.init();
+    await usage.record({ inputTokens: 123456, outputTokens: 654321 });
     const upload = vi.fn<typeof uploadFiles>().mockResolvedValue(undefined);
     const hub = new HuggingFace(store, { upload });
     expect(await hub.push()).toEqual({ url: 'https://huggingface.co/datasets/owner/config/blob/main/mcm/workspace.json' });
@@ -52,6 +78,7 @@ describe('Hugging Face portable workspace exchange', () => {
     expect(file.path).toBe('mcm/workspace.json');
     expect(JSON.parse(await file.content.text())).toEqual(emptyWorkspace());
     expect(await file.content.text()).not.toContain('hf_secret');
+    expect(await file.content.text()).not.toMatch(/allTime|sessionId|123456|654321/);
     await store.saveSettings({ clearHfToken: true });
     await expect(hub.push()).rejects.toThrow('write token');
   });

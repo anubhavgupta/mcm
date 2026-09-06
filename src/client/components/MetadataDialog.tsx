@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { useForm } from 'react-hook-form';
+import { useForm, useWatch } from 'react-hook-form';
 import { Box, Folder, RefreshCw, Trash2 } from 'lucide-react';
 import { repoSchema } from '../../shared/config';
 import type { ConfigGroup, ModelConfig, ModelFile, Workspace } from '../../shared/types';
@@ -7,7 +7,9 @@ import { api, errorMessage } from '../api';
 import { Dialog } from './Dialog';
 import { useUnsavedWarning } from '../hooks/useUnsavedWarning';
 
-interface MetadataValues { name: string; filename: string; repo: string; groupId: string }
+interface MetadataValues {
+  name: string; filename: string; repo: string; groupId: string;
+}
 export type MetadataTarget = { kind: 'group'; item?: ConfigGroup } | { kind: 'model'; item?: ModelConfig };
 
 export function MetadataDialog({ target, workspace, onClose, onSave, onDelete, busy }: {
@@ -18,8 +20,11 @@ export function MetadataDialog({ target, workspace, onClose, onSave, onDelete, b
   const isModel = target.kind === 'model';
   const model = target.kind === 'model' ? target.item : undefined;
   const form = useForm<MetadataValues>({
-    defaultValues: { name: target.item?.name ?? '', filename: model?.model.filename ?? '', repo: model?.model.repo ?? '', groupId: model?.groupId ?? '' },
+    defaultValues: {
+      name: target.item?.name ?? '', filename: model?.model.filename ?? '', repo: model?.model.repo ?? '', groupId: model?.groupId ?? '',
+    },
   });
+  const selectedFilename = useWatch({ control: form.control, name: 'filename' });
   const [files, setFiles] = useState<ModelFile[]>([]);
   const [discovery, setDiscovery] = useState({ loading: isModel, error: '' });
   const [refresh, setRefresh] = useState(0);
@@ -46,7 +51,7 @@ export function MetadataDialog({ target, workspace, onClose, onSave, onDelete, b
       <div className="form-field"><label htmlFor="entity-name">{isModel ? 'Model name' : 'Group name'}</label><input id="entity-name" autoFocus placeholder={isModel ? 'e.g. My coding model' : 'e.g. Creative writing'} {...form.register('name', { required: 'A name is required.', maxLength: { value: 120, message: 'Use 120 characters or fewer.' }, validate: value => !!value.trim() || 'A name is required.' })} aria-invalid={!!form.formState.errors.name} />
         {form.formState.errors.name && <p className="field-error" role="alert">{form.formState.errors.name.message}</p>}</div>
       {isModel && <>
-        <div className="form-field"><label htmlFor="model-filename">GGUF model</label><select id="model-filename" disabled={discovery.loading || busy} {...form.register('filename', {
+        <div className="form-field"><label htmlFor="model-filename">GGUF model</label><select id="model-filename" value={selectedFilename} disabled={discovery.loading || busy} {...form.register('filename', {
           required: 'Select a GGUF model.',
           maxLength: { value: 255, message: 'Use 255 characters or fewer.' },
           pattern: { value: /^[^/\\:\x00-\x1f]+\.gguf$/i, message: 'Select a portable GGUF filename.' },

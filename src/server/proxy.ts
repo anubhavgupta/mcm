@@ -19,6 +19,8 @@ export function filteredHeaders(headers: IncomingHttpHeaders): OutgoingHttpHeade
 
 export class ProxyService {
   private pending = new Set<AbortController>();
+  private completions = new Set<Promise<void>>();
+  private closing = false;
   constructor(private upstream: () => string, private interceptors: Interceptor[], private events: Events) {}
   private async observe<K extends keyof Interceptor>(hook: K, ...args: Parameters<NonNullable<Interceptor[K]>>): Promise<void> {
     for (const interceptor of this.interceptors) {
@@ -31,8 +33,15 @@ export class ProxyService {
     }
   }
   async handle(request: Request, response: Response): Promise<void> {
+    if (this.closing) {
+      response.status(503).json({ error: 'Manager is shutting down.' });
+      return;
+    }
     const controller = new AbortController();
     this.pending.add(controller);
+    let resolveCompletion!: () => void;
+    const completion = new Promise<void>(resolve => { resolveCompletion = resolve; });
+    this.completions.add(completion);
     let completed = false;
     let preparing = false;
     const original = new URL(request.originalUrl, 'http://localhost');
@@ -93,6 +102,9 @@ export class ProxyService {
         if (outbound.body !== undefined) delete headers['content-encoding'];
         if (originalBody === undefined) request.resume();
       }
+      await this.observe('onOutboundRequest', context, Object.fromEntries(
+        Object.entries(headers).map(([key, value]) => [key, typeof value === 'number' ? String(value) : value]),
+      ));
       const upstream = (target.protocol === 'https:' ? httpsRequest : httpRequest)(target, {
         method: request.method, headers, signal: controller.signal,
       });
@@ -106,6 +118,9 @@ export class ProxyService {
       const observer = new Transform({
         transform: (chunk: Buffer, _encoding: BufferEncoding, callback: TransformCallback) => {
           this.observe('onRequestChunk', context, new Uint8Array(chunk)).then(() => callback(null, chunk), callback);
+        },
+        flush: (callback: TransformCallback) => {
+          this.observe('onRequestEnd', context).then(() => callback(), callback);
         },
       });
       const requestPiping = pipeline(body !== undefined ? Readable.from([body]) : request, observer, upstream).catch(error => {
@@ -147,7 +162,13 @@ export class ProxyService {
       request.removeListener('aborted', cancel);
       response.removeListener('close', cancel);
       this.pending.delete(controller);
+      this.completions.delete(completion);
+      resolveCompletion();
     }
   }
-  close(): void { for (const controller of this.pending) controller.abort(); }
+  async close(): Promise<void> {
+    this.closing = true;
+    for (const controller of this.pending) controller.abort();
+    await Promise.all(this.completions);
+  }
 }

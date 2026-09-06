@@ -1,5 +1,6 @@
 import { uploadFiles } from '@huggingface/hub';
 import { repoSchema, workspaceSchema } from '../shared/config';
+import { modelWorkspace } from '../shared/sharing';
 import type { Workspace } from '../shared/types';
 import { ApiError } from './errors';
 import { Store } from './storage';
@@ -32,14 +33,17 @@ export class HuggingFace {
     }
     throw new ApiError(502, 'Hugging Face returned too many redirects.');
   };
-  async push(requested?: string): Promise<{ url: string }> {
+  async push(requested?: string, modelId?: string): Promise<{ url: string }> {
     const repo = this.repo(requested);
     const token = this.store.getSettings().hfToken;
     if (!token) throw new ApiError(400, 'Configure a Hugging Face write token in Machine settings before pushing.');
+    const workspace = this.store.getWorkspace();
+    if (modelId && !workspace.models.some(model => model.id === modelId)) throw new ApiError(404, 'Selected model configuration not found.');
+    const shared = modelId ? modelWorkspace(workspace, modelId) : workspace;
     try {
       await (this.options.upload ?? uploadFiles)({
         repo: { type: 'dataset', name: repo },
-        files: [{ path: FILE, content: new Blob([JSON.stringify(workspaceSchema.parse(this.store.getWorkspace()), null, 2)], { type: 'application/json' }) }],
+        files: [{ path: FILE, content: new Blob([JSON.stringify(workspaceSchema.parse(shared), null, 2)], { type: 'application/json' }) }],
         accessToken: token, hubUrl: HUB, fetch: this.safeFetch,
         commitTitle: 'Update MCM workspace', abortSignal: AbortSignal.timeout(30000), useXet: false,
       });

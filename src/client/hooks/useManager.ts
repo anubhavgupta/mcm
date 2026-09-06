@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { z } from 'zod';
-import type { Bootstrap, LogEntry, PublicSettings, ServerStatus, Throughput, Workspace } from '../../shared/types';
+import type { Bootstrap, LogEntry, PublicSettings, ServerStatus, Throughput, UsageSummary, Workspace } from '../../shared/types';
+import { usageSummarySchema } from '../../shared/usage';
 import { api, errorMessage } from '../api';
 
 const statusSchema = z.object({
@@ -10,6 +11,7 @@ const statusSchema = z.object({
   error: z.string().optional(),
 });
 const eventSchema = z.discriminatedUnion('type', [
+  z.object({ type: z.literal('usage'), data: usageSummarySchema }),
   z.object({ type: z.literal('status'), data: statusSchema }),
   z.object({ type: z.literal('log'), data: z.object({
     timestamp: z.string(), stream: z.enum(['stdout', 'stderr', 'manager']), text: z.string(),
@@ -31,13 +33,16 @@ export function useManager() {
   const [status, setStatus] = useState<ServerStatus | null>(null);
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [throughput, setThroughput] = useState<Throughput | null>(null);
+  const [usage, setUsage] = useState<UsageSummary | null>(null);
   const seen = useRef(new Set<string>());
   const reload = useCallback(async () => {
     setLoading(true);
     try {
       const result = await api<Bootstrap>('/bootstrap');
+      const initialUsage = usageSummarySchema.parse(result.usage);
       setData(result);
       setStatus(result.status);
+      setUsage(current => current ?? initialUsage);
       setError('');
     } catch (failure) {
       setError(errorMessage(failure));
@@ -61,6 +66,7 @@ export function useManager() {
           if (message.data.phase === 'starting' || message.data.phase === 'stopped') setThroughput(null);
         }
         if (message.type === 'throughput') setThroughput(message.data);
+        if (message.type === 'usage') setUsage(message.data);
         if (message.type === 'log') {
           const key = `${message.data.timestamp}:${message.data.stream}:${message.data.text}`;
           if (seen.current.has(key)) return;
@@ -84,5 +90,5 @@ export function useManager() {
 
   const setWorkspace = (workspace: Workspace) => setData(current => current ? { ...current, workspace } : current);
   const setSettings = (settings: PublicSettings) => setData(current => current ? { ...current, settings } : current);
-  return { data, error, loading, reload, connected, status, setStatus, logs, clearLogs: () => setLogs([]), throughput, setWorkspace, setSettings };
+  return { data, error, loading, reload, connected, status, setStatus, logs, clearLogs: () => setLogs([]), throughput, usage, setWorkspace, setSettings };
 }

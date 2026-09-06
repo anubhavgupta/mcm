@@ -1,6 +1,6 @@
 import express, { type ErrorRequestHandler, type RequestHandler } from 'express';
 import { z } from 'zod';
-import { repoSchema } from '../shared/config';
+import { repoSchema, resolvePricing } from '../shared/config';
 import { ApiError } from './errors';
 import { Store } from './storage';
 import { Events } from './events';
@@ -9,6 +9,7 @@ import { discoverModels } from './models';
 import { HuggingFace, type HubOptions } from './huggingface';
 import { ThroughputInterceptor, type Interceptor } from './interceptors';
 import { ProxyService } from './proxy';
+import { UsageInterceptor, UsageStore } from './usage';
 
 export interface AppOptions {
   dataDir: string;
@@ -67,6 +68,7 @@ const proxyCors: RequestHandler = (request, response, next) => {
 
 const modelRequest = z.object({ modelId: z.string().regex(/^[a-zA-Z0-9_-]{1,100}$/) }).strict();
 const hubRequest = z.object({ repo: repoSchema.optional() }).strict();
+const hubPushRequest = hubRequest.extend({ modelId: modelRequest.shape.modelId.optional() });
 const noBody = z.object({}).strict();
 
 export async function createApp(options: AppOptions) {
@@ -74,12 +76,28 @@ export async function createApp(options: AppOptions) {
   await store.init();
   const events = new Events(text => store.redact(text));
   const manager = new ProcessManager(store, events, options.process);
+  const usage = new UsageStore(options.dataDir, events);
+  await usage.init();
   const upstream = (): string => {
     const settings = store.getSettings();
     return settings.upstreamUrl || `http://127.0.0.1:${manager.getManagedPort() ?? settings.serverPort}`;
   };
   const throughput = new ThroughputInterceptor(events, upstream, options.metricsFetch, options.metricsPollMs);
-  const proxy = new ProxyService(upstream, [throughput, ...options.interceptors ?? []], events);
+  const accounting = new UsageInterceptor(usage, () => {
+    const workspace = store.getWorkspace();
+    const settings = store.getSettings();
+    const managedPort = manager.getManagedPort();
+    const configured = settings.upstreamUrl ? new URL(settings.upstreamUrl) : undefined;
+    const targetsManagedServer = managedPort !== undefined && (!configured ||
+      (configured.protocol === 'http:' && ['127.0.0.1', 'localhost'].includes(configured.hostname) &&
+        Number(configured.port || 80) === managedPort));
+    return {
+      models: workspace.models.map(model => ({ ...model, pricing: resolvePricing(workspace, model) })),
+      basePricing: resolvePricing(workspace),
+      managedModelId: targetsManagedServer ? manager.getStatus().modelId : undefined,
+    };
+  });
+  const proxy = new ProxyService(upstream, [throughput, accounting, ...options.interceptors ?? []], events);
   const hub = new HuggingFace(store, options.hub);
   const app = express();
   app.disable('x-powered-by');
@@ -100,8 +118,9 @@ export async function createApp(options: AppOptions) {
   app.use(guard);
   app.use('/api', express.json({ limit: '2mb', strict: true }));
   app.get('/api/bootstrap', (_request, response) => {
-    response.json({ workspace: store.getWorkspace(), settings: store.publicSettings(), status: manager.getStatus() });
+    response.json({ workspace: store.getWorkspace(), settings: store.publicSettings(), status: manager.getStatus(), usage: usage.getSummary() });
   });
+  app.get('/api/usage', (_request, response) => { response.json(usage.getSummary()); });
   app.put('/api/workspace', async (request, response) => { response.json(await store.saveWorkspace(request.body)); });
   app.put('/api/settings', async (request, response) => { response.json(await store.saveSettings(request.body)); });
   app.get('/api/models', async (_request, response) => {
@@ -126,10 +145,11 @@ export async function createApp(options: AppOptions) {
     response.json(await manager.restart());
   });
   app.get('/api/events', (request, response) => {
-    events.connect(response, manager.getStatus(), request.get('Last-Event-ID'));
+    events.connect(response, manager.getStatus(), request.get('Last-Event-ID'), usage.getSummary());
   });
   app.post('/api/hf/push', async (request, response) => {
-    response.json(await hub.push(hubRequest.parse(request.body ?? {}).repo));
+    const { repo, modelId } = hubPushRequest.parse(request.body ?? {});
+    response.json(await hub.push(repo, modelId));
   });
   app.post('/api/hf/pull', async (request, response) => {
     response.json(await hub.pull(hubRequest.parse(request.body ?? {}).repo));
@@ -153,10 +173,12 @@ export async function createApp(options: AppOptions) {
   async function close(): Promise<void> {
     if (closed) return;
     closed = true;
-    proxy.close();
-    throughput.close();
-    await manager.close();
-    events.close();
+    try {
+      await proxy.close();
+      throughput.close();
+      await manager.close();
+      await usage.close();
+    } finally { events.close(); }
   }
-  return { app, store, manager, events, close };
+  return { app, store, manager, events, usage, close };
 }

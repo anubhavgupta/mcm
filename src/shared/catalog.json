@@ -4,7 +4,8 @@
     { "id": "compute", "title": "Compute", "description": "Balance model placement and parallelism." },
     { "id": "sampling", "title": "Sampling", "description": "Shape the model's output." },
     { "id": "memory", "title": "Memory & context", "description": "Control context size and KV cache behavior." },
-    { "id": "advanced", "title": "Advanced", "description": "Templates, reasoning, and speculative decoding." }
+    { "id": "advanced", "title": "Advanced", "description": "Templates, reasoning, and speculative decoding." },
+    { "id": "pricing", "title": "Token pricing", "description": "Value consumed tokens with inherited or overridden USD rates." }
   ],
   "fields": [
     { "key": "gpuLayers", "label": "GPU layers", "section": "compute", "control": "number", "flag": "--gpu-layers", "aliases": ["--n-gpu-layers", "-ngl"], "default": 99, "min": 0, "max": 1000, "integer": true, "description": "Set 0 for CPU-only inference." },
@@ -31,6 +32,8 @@
     { "key": "reasoning", "label": "Reasoning", "section": "advanced", "control": "select", "flag": "--reasoning", "default": "auto", "options": ["auto", "on", "off"] },
     { "key": "speculation", "label": "Speculation", "section": "advanced", "control": "select", "flag": "--spec-type", "default": "none", "options": ["none", "ngram-mod", "draft-mtp"], "omitValues": ["none"], "description": "Available modes depend on your llama.cpp build and model." },
     { "key": "draftMax", "label": "Maximum draft tokens", "section": "advanced", "control": "number", "flag": "--spec-draft-n-max", "default": 4, "min": 1, "max": 256, "integer": true, "dependsOn": { "key": "speculation", "equals": "draft-mtp" } },
-    { "key": "verbose", "label": "Verbose server logs", "section": "advanced", "control": "toggle", "flag": "--verbose", "default": false }
+    { "key": "verbose", "label": "Verbose server logs", "section": "advanced", "control": "toggle", "flag": "--verbose", "default": false },
+    { "key": "inputUsdPerMillion", "label": "Input price (USD / 1M tokens)", "section": "pricing", "control": "number", "default": 0.25, "min": 0, "max": 1000000, "description": "Estimated value per million input tokens. Zero is a valid override; this is not a server flag or an actual charge." },
+    { "key": "outputUsdPerMillion", "label": "Output price (USD / 1M tokens)", "section": "pricing", "control": "number", "default": 2, "min": 0, "max": 1000000, "description": "Estimated value per million output tokens. Model overrides Group, Group overrides Base. Changes apply to new requests." }
   ]
 }

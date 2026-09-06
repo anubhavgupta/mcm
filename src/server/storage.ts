@@ -39,6 +39,30 @@ export async function syncDirectory(path: string, platform: NodeJS.Platform = pr
   try { await directory.sync(); } finally { await directory.close(); }
 }
 
+export async function atomicJson(directory: string, name: string, data: unknown): Promise<void> {
+  const path = join(directory, `.${name}.${randomUUID()}`);
+  const file = await open(path, 'wx', 0o600);
+  let closed = false;
+  try {
+    await file.writeFile(JSON.stringify(data, null, 2));
+    await file.sync();
+    await file.close();
+    closed = true;
+    await rename(path, join(directory, name));
+    await syncDirectory(directory);
+  } finally {
+    try {
+      if (!closed) await file.close().catch((error: NodeJS.ErrnoException) => {
+        if (error.code !== 'EBADF') throw error;
+      });
+    } finally {
+      await unlink(path).catch((error: NodeJS.ErrnoException) => {
+        if (error.code !== 'ENOENT') throw error;
+      });
+    }
+  }
+}
+
 export class Store {
   private workspace: Workspace = emptyWorkspace();
   private settings: LocalSettings = structuredClone(defaultSettings);
@@ -62,27 +86,7 @@ export class Store {
     }
   }
   private async atomic(name: string, data: unknown): Promise<void> {
-    const path = join(this.directory, `.${name}.${randomUUID()}`);
-    const file = await open(path, 'wx', 0o600);
-    let closed = false;
-    try {
-      await file.writeFile(JSON.stringify(data, null, 2));
-      await file.sync();
-      await file.close();
-      closed = true;
-      await rename(path, join(this.directory, name));
-      await syncDirectory(this.directory);
-    } finally {
-      try {
-        if (!closed) await file.close().catch((error: NodeJS.ErrnoException) => {
-          if (error.code !== 'EBADF') throw error;
-        });
-      } finally {
-        await unlink(path).catch((error: NodeJS.ErrnoException) => {
-          if (error.code !== 'ENOENT') throw error;
-        });
-      }
-    }
+    await atomicJson(this.directory, name, data);
   }
   private serialize<T>(fn: () => Promise<T>): Promise<T> {
     const operation = this.queue.then(fn);

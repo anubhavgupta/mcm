@@ -3,6 +3,18 @@ import type { Workspace } from './types';
 
 const MAX_SHARE_BYTES = 48_000;
 
+export function modelWorkspace(workspace: Workspace, modelId: string): Workspace {
+  const model = workspace.models.find(item => item.id === modelId);
+  if (!model) throw new Error('Selected model configuration not found.');
+  return workspaceSchema.parse({
+    version: workspace.version,
+    base: workspace.base,
+    ...(workspace.basePricing ? { basePricing: workspace.basePricing } : {}),
+    groups: workspace.groups.filter(group => group.id === model.groupId),
+    models: [model],
+  });
+}
+
 export function encodeWorkspace(workspace: Workspace): string {
   const bytes = new TextEncoder().encode(JSON.stringify(workspaceSchema.parse(workspace)));
   if (bytes.length > MAX_SHARE_BYTES) throw new Error('This workspace is too large for a link. Use JSON export or Hugging Face instead.');

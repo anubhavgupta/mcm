@@ -1,8 +1,8 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { ArrowDownToLine, ArrowUpFromLine, Check, Copy, ExternalLink, FileJson, Globe, Link2 } from 'lucide-react';
 import { repoSchema, workspaceSchema } from '../../shared/config';
-import { createShareUrl } from '../../shared/sharing';
+import { createShareUrl, modelWorkspace } from '../../shared/sharing';
 import type { Workspace } from '../../shared/types';
 import { api, errorMessage, jsonBody } from '../api';
 import { Dialog } from './Dialog';
@@ -13,18 +13,24 @@ export function validateWorkspace(value: unknown): Workspace {
   return result.data;
 }
 
-interface ShareValues { repo: string; link: string; upload: FileList; uploadedUrl: string; hfLink: string }
+interface ShareValues { scope: 'model' | 'workspace'; repo: string; link: string; upload: FileList; uploadedUrl: string; hfLink: string }
 
-export function ShareDialog({ workspace, repo, onClose, onImport, notify }: {
-  workspace: Workspace; repo: string; onClose: () => void;
+export function ShareDialog({ workspace, selectedModelId, repo, onClose, onImport, notify }: {
+  workspace: Workspace; selectedModelId?: string; repo: string; onClose: () => void;
   onImport: (workspace: Workspace, source: string) => void; notify: (message: string, error?: boolean) => void;
 }) {
+  const form = useForm<ShareValues>({ defaultValues: { scope: selectedModelId ? 'model' : 'workspace', repo, link: '', uploadedUrl: '', hfLink: '' } });
+  const scope = form.watch('scope');
+  const shared = scope === 'model' && selectedModelId ? modelWorkspace(workspace, selectedModelId) : workspace;
   let link = '';
   let linkError = '';
-  try { link = createShareUrl(workspace, window.location.origin); } catch (error) { linkError = errorMessage(error); }
-  const form = useForm<ShareValues>({ defaultValues: { repo, link, uploadedUrl: '', hfLink: '' } });
+  try { link = createShareUrl(shared, window.location.origin); } catch (error) { linkError = errorMessage(error); }
   const [busy, setBusy] = useState<'push' | 'pull' | null>(null);
   const [copied, setCopied] = useState(false);
+  useEffect(() => {
+    form.setValue('link', link);
+    setCopied(false);
+  }, [link, form]);
   const uploadedUrl = form.watch('uploadedUrl');
   const hfLink = form.watch('hfLink');
   const copy = async (text: string) => {
@@ -38,11 +44,11 @@ export function ShareDialog({ workspace, repo, onClose, onImport, notify }: {
     }
   };
   const hfAction = (action: 'push' | 'pull') => form.handleSubmit(async values => {
-    if (action === 'push' && !window.confirm('Upload your saved workspace to this existing dataset repository? This replaces mcm/workspace.json in the repository.')) return;
+    if (action === 'push' && !window.confirm(`Upload ${values.scope === 'model' ? 'the selected model and its inherited settings' : 'all saved configurations'} to this existing dataset repository? This replaces mcm/workspace.json in the repository.`)) return;
     setBusy(action);
     try {
       if (action === 'push') {
-        const result = await api<{ url: string }>('/hf/push', jsonBody({ repo: values.repo }));
+        const result = await api<{ url: string }>('/hf/push', jsonBody({ repo: values.repo, ...(values.scope === 'model' && selectedModelId ? { modelId: selectedModelId } : {}) }));
         form.setValue('uploadedUrl', result.url);
         const url = new URL(window.location.origin);
         url.hash = `hf=${values.repo}`;
@@ -55,17 +61,21 @@ export function ShareDialog({ workspace, repo, onClose, onImport, notify }: {
     } catch (error) { notify(errorMessage(error), true); } finally { setBusy(null); }
   });
   const download = () => {
-    const blob = new Blob([JSON.stringify(workspaceSchema.parse(workspace), null, 2)], { type: 'application/json' });
+    const blob = new Blob([JSON.stringify(workspaceSchema.parse(shared), null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement('a');
     anchor.href = url; anchor.download = 'mcm-workspace.json'; anchor.click();
     URL.revokeObjectURL(url);
     notify('Workspace JSON downloaded.');
   };
-  return <Dialog title="Share your workspace" subtitle="Every configuration. None of your machine paths or credentials." onClose={() => { if (!busy) onClose(); }} wide>
-    <div className="share-summary"><div><strong>{workspace.models.length}</strong><span>Models</span></div><div><strong>{workspace.groups.length}</strong><span>Groups</span></div><div><strong>{Object.keys(workspace.base).length}</strong><span>Base overrides</span></div><span className="subtle-badge"><Globe size={12} />Portable by design</span></div>
+  return <Dialog title="Share configurations" subtitle="Choose what to share. Machine paths and credentials stay private." onClose={() => { if (!busy) onClose(); }} wide>
+    <div className="share-summary"><div><strong>{shared.models.length}</strong><span>Models</span></div><div><strong>{shared.groups.length}</strong><span>Groups</span></div><div><strong>{Object.keys(shared.base).length}</strong><span>Base overrides</span></div><span className="subtle-badge"><Globe size={12} />Portable by design</span></div>
     <form className="dialog-form" onSubmit={event => event.preventDefault()}>
-      <section className="share-section"><h3><Link2 size={18} />Configuration link</h3><p className="field-help">A complete snapshot of your saved workspace. Anyone with this link can review and import it.</p>
+      <div className="form-field"><label htmlFor="share-scope">Share scope</label><select id="share-scope" disabled={!!busy} {...form.register('scope')}>
+        <option value="model" disabled={!selectedModelId}>Selected model only</option>
+        <option value="workspace">All model configurations</option>
+      </select><p className="field-help">{selectedModelId ? 'Selected model exports include its base settings and assigned group. This scope applies to links, JSON and Hugging Face uploads.' : 'Select a model in the sidebar to share only that model. Currently sharing all configurations.'}</p></div>
+      <section className="share-section"><h3><Link2 size={18} />Configuration link</h3><p className="field-help">A snapshot of the selected scope. Anyone with this link can review and import it.</p>
         {linkError ? <p className="inline-error" role="alert">{linkError}</p> : <div className="copy-row"><label className="sr-only" htmlFor="share-link">Workspace share link</label><input id="share-link" readOnly {...form.register('link')} /><button type="button" className="button secondary" onClick={() => void copy(link)}>{copied ? <Check size={15} /> : <Copy size={15} />}Copy link</button></div>}
       </section>
       <section className="share-section"><h3><FileJson size={18} />Take it with you</h3><p className="field-help">Keep a JSON backup or review a workspace from another machine.</p><div className="file-actions"><button type="button" className="button secondary" onClick={download}><ArrowDownToLine size={15} />Download JSON</button><label className="button secondary upload-button"><ArrowUpFromLine size={15} />Import JSON<input type="file" accept=".json,application/json" aria-label="Import workspace JSON" {...form.register('upload', { onChange: async (event: React.ChangeEvent<HTMLInputElement>) => {

@@ -151,7 +151,7 @@ export default function App() {
         {selectedModel && <div className="model-identity"><Box size={15} /><code>{selectedModel.model.filename}</code>{selectedModel.model.repo && <span>{selectedModel.model.repo}</span>}<span className="identity-parent">Inherits from {group?.name ?? 'Base'}</span></div>}
         {!workspace.models.length && <section className="welcome-card"><div className="welcome-icon"><Box size={23} /></div><div><h2>A good model deserves a great setup.</h2><p>Start with your base defaults, then add your first model. Share the same setup anywhere.</p></div><button className="button secondary" onClick={() => openCreate('model')}><Plus size={15} />Create your first model<ArrowRight size={14} /></button></section>}
         <div className="content-grid"><ConfigEditor key={`${selection.kind}-${selection.kind === 'base' ? '' : selection.id}-${editorVersion}`} workspace={workspace} selection={selection} capabilities={capabilities} onDirty={setDirty} onSave={saveValues} busy={!!busy} />
-          <RuntimePanel connected={manager.connected} status={manager.status} throughput={manager.throughput} logs={manager.logs} clearLogs={manager.clearLogs} notify={notify} preview={preview} canPreview={!!selectedModel} capabilities={capabilities} busy={!!busy}
+          <RuntimePanel connected={manager.connected} status={manager.status} throughput={manager.throughput} usage={manager.usage} logs={manager.logs} clearLogs={manager.clearLogs} notify={notify} preview={preview} canPreview={!!selectedModel} capabilities={capabilities} busy={!!busy}
             probe={() => guard(() => void run('probe', async () => { setCapabilities(await api<Capabilities>('/capabilities', jsonBody({}))); notify('Executable capabilities refreshed.'); }))} />
         </div>
         <footer className="page-footer"><span>MCM — a little more control.</span><span>Built for llama.cpp <span aria-hidden="true">↗</span></span></footer>
@@ -164,7 +164,8 @@ export default function App() {
         const item = { id, name: values.name.trim(), values: target.item?.values ?? {} };
         await persist({ ...workspace, groups: target.item ? workspace.groups.map(group => group.id === id ? item : group) : [...workspace.groups, item] });
       } else {
-        const item = { id, name: values.name.trim(), model: { filename: values.filename, ...(values.repo ? { repo: values.repo } : {}) }, ...(values.groupId ? { groupId: values.groupId } : {}), values: target.item?.values ?? {} };
+        const item = { id, name: values.name.trim(), model: { filename: values.filename, ...(values.repo ? { repo: values.repo } : {}) }, ...(values.groupId ? { groupId: values.groupId } : {}), values: target.item?.values ?? {},
+        };
         await persist({ ...workspace, models: target.item ? workspace.models.map(model => model.id === id ? item : model) : [...workspace.models, item] });
       }
       setSelection({ kind: target.kind, id });
@@ -185,7 +186,7 @@ export default function App() {
       const result = await api<PublicSettings>('/settings', { method: 'PUT', body: JSON.stringify({ ...values, modelBindings: bindings }) });
       manager.setSettings(result); setCapabilities(null); setModal(null); notify('Machine settings saved. Running processes are unchanged until restart.');
     })} />}
-    {modal?.kind === 'share' && <ShareDialog workspace={workspace} repo={settings.hfRepo} onClose={closeModal} notify={notify} onImport={(incoming, source) => setModal({ kind: 'import', workspace: incoming, source })} />}
+    {modal?.kind === 'share' && <ShareDialog workspace={workspace} selectedModelId={selectedModel?.id} repo={settings.hfRepo} onClose={closeModal} notify={notify} onImport={(incoming, source) => setModal({ kind: 'import', workspace: incoming, source })} />}
     {modal?.kind === 'import' && <ImportDialog workspace={modal.workspace} current={workspace} source={modal.source} busy={!!busy} onClose={closeModal} onImport={() => void run('import', async () => {
       await persist(modal.workspace); setSelection({ kind: 'base' }); setModal(null); clearHash(); window.scrollTo({ top: 0 }); notify('Workspace imported. Machine settings are unchanged. No model was launched.');
     })} />}
