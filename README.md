@@ -147,6 +147,20 @@ token is unrelated and is never injected into inference traffic.
 
 ### Throughput, not hardware graphs
 
+Request-specific timings take precedence over server-wide polling once available.
+Partial timing events retain previously measured rates for that request; zero-token
+timing placeholders do not replace them. The card follows the most recently started
+inference request, rather than alternating between concurrent requests or model-list
+requests. A new inference request starts with unavailable timings until measured.
+
+Choose **Picture-in-picture** above the Inference card to move its live throughput
+and token counts into an always-on-top window. Executable controls and server logs
+stay on the main page. Use **Return to page** or close
+the PiP window to restore the card. Keep the main MCM tab open: it owns the event
+stream. Native Document Picture-in-Picture requires a supporting browser and
+a secure context (localhost qualifies). Other browsers use a floating panel
+inside the current tab, not an always-on-top OS window.
+
 The default interceptor observes llama.cpp timing data and available native
 Prometheus metrics. The UI displays:
 

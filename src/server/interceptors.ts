@@ -99,8 +99,8 @@ export function nativeTimings(value: unknown): Partial<Throughput> | undefined {
       ...(outputTokens !== null ? { outputTokens } : {}),
     };
   }
-  const pp = nonnegative(timings.prompt_per_second);
-  const tg = nonnegative(timings.predicted_per_second);
+  const pp = timings.prompt_n === 0 ? null : nonnegative(timings.prompt_per_second);
+  const tg = timings.predicted_n === 0 ? null : nonnegative(timings.predicted_per_second);
   return {
     pp, tg, inputTokens, outputTokens,
     source: pp !== null || tg !== null ? 'llama.cpp' : 'unavailable',
@@ -128,16 +128,20 @@ interface Observation {
 
 export class ThroughputInterceptor implements Interceptor {
   private observations = new Map<string, Observation>();
+  private displayedRequestId?: string;
   private timer?: ReturnType<typeof setInterval>;
   private polling = false;
   private controller = new AbortController();
   constructor(private events: Events, private upstream: () => string, private fetcher: typeof fetch = fetch, private pollMs = 1000) {}
   onRequest(context: RequestContext): void {
+    const path = context.path.split('?')[0];
+    if (context.method !== 'POST' || !/^\/v1\/(?:chat\/completions|completions|messages|responses|embeddings)\/?$/.test(path)) return;
     const observation: Observation = {
       throughput: { requestId: context.requestId, protocol: context.protocol, pp: null, tg: null, inputTokens: null, outputTokens: null, source: 'unavailable', active: true },
       chunks: [], bytes: 0, json: false,
     };
     this.observations.set(context.requestId, observation);
+    this.displayedRequestId = context.requestId;
     this.emit(observation);
     if (!this.timer) {
       this.timer = setInterval(() => { void this.poll(); }, this.pollMs);
@@ -165,15 +169,27 @@ export class ThroughputInterceptor implements Interceptor {
   onComplete(context: RequestContext): void { this.finish(context); }
   onError(context: RequestContext): void { this.finish(context); }
   private parse(observation: Observation, text: string): void {
+    let payload: unknown;
     try {
-      const timings = nativeTimings(JSON.parse(text));
-      if (timings) {
-        Object.assign(observation.throughput, timings, timings.source ? { measurement: 'timings' } : {});
-        this.emit(observation);
-      }
-    } catch { /* SSE keepalives, [DONE], and non-JSON content are not measurements. */ }
+      payload = JSON.parse(text);
+    } catch { return; } // SSE keepalives and [DONE] are not measurements.
+    const timings = nativeTimings(payload);
+    if (!timings) return;
+    const current = observation.throughput;
+    if (timings.inputTokens != null) current.inputTokens = timings.inputTokens;
+    if (timings.outputTokens != null) current.outputTokens = timings.outputTokens;
+    if (timings.source === 'llama.cpp') {
+      // Do not mix server-wide rates with request timings or erase timings with partial events.
+      if (current.measurement !== 'timings') { current.pp = null; current.tg = null; }
+      if (timings.pp != null) current.pp = timings.pp;
+      if (timings.tg != null) current.tg = timings.tg;
+      current.source = 'llama.cpp';
+      current.measurement = 'timings';
+    }
+    this.emit(observation);
   }
   private emit(observation: Observation): void {
+    if (observation.throughput.requestId !== this.displayedRequestId) return;
     this.events.emit({ type: 'throughput', data: { ...observation.throughput } });
   }
   private finish(context: RequestContext): void {
@@ -191,6 +207,7 @@ export class ThroughputInterceptor implements Interceptor {
   private async poll(): Promise<void> {
     if (this.polling || !this.observations.size) return;
     this.polling = true;
+    const polled = [...this.observations.values()];
     try {
       const response = await this.fetcher(new URL('/metrics', this.upstream()), {
         signal: AbortSignal.any([this.controller.signal, AbortSignal.timeout(1500)]), redirect: 'error',
@@ -211,7 +228,9 @@ export class ThroughputInterceptor implements Interceptor {
       } finally { reader.releaseLock(); }
       const rates = parsePrometheus(Buffer.concat(chunks).toString('utf8'));
       if (rates.pp === null && rates.tg === null) return;
-      for (const observation of this.observations.values()) {
+      for (const observation of polled) {
+        if (this.observations.get(observation.throughput.requestId) !== observation ||
+          observation.throughput.measurement === 'timings') continue;
         Object.assign(observation.throughput, rates, { source: 'llama.cpp', measurement: 'prometheus' });
         this.emit(observation);
       }

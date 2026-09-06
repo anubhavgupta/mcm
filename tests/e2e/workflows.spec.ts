@@ -249,3 +249,50 @@ test('fits the viewport without horizontal overflow', async ({ page }) => {
   await expect(page.getByRole('dialog')).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
 });
+
+test('inference floats and restores when native picture-in-picture is unavailable', async ({ page }) => {
+  await page.addInitScript(() => Object.defineProperty(window, 'documentPictureInPicture', { value: undefined }));
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Open inference picture-in-picture' }).click();
+  const floating = page.getByRole('region', { name: 'Floating inference card' });
+  await expect(floating.getByText('Token generation', { exact: false })).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
+  await expect(floating.getByRole('heading', { name: 'Executable', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('heading', { name: 'Server logs', exact: true })).toBeVisible();
+  await floating.getByRole('button', { name: 'Return inference to page' }).click();
+  await expect(floating).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Open inference picture-in-picture' })).toBeVisible();
+});
+
+test('native inference picture-in-picture restores after closing its window', async ({ page, context, request }) => {
+  await page.goto('/');
+  test.skip(!await page.evaluate(() => !!window.documentPictureInPicture), 'Document PiP is not supported by this browser.');
+  const opened = context.waitForEvent('page');
+  await page.getByRole('button', { name: 'Open inference picture-in-picture' }).click();
+  const pip = await opened;
+  await expect(pip.getByRole('heading', { name: 'Inference', exact: true })).toBeVisible();
+  await expect(pip.getByRole('heading', { name: 'Executable', exact: true })).toHaveCount(0);
+  await expect(pip.getByRole('log')).toHaveCount(0);
+  await expect(page.getByRole('heading', { name: 'Executable', exact: true })).toBeVisible();
+  await expect(pip.getByText('Token generation', { exact: false })).toBeVisible();
+  const launch = await request.post('/api/launch', { data: { modelId: 'tiny' } });
+  expect(launch.ok()).toBe(true);
+  await expect.poll(async () => (await bootstrap(request)).status.phase).toBe('ready');
+  await request.post('/v1/chat/completions', { data: { messages: [{ role: 'user', content: 'Hello' }], stream: true } });
+  await expect(pip.getByText('32.5', { exact: true })).toBeVisible();
+  await expect(page.getByRole('log')).toContainText('Fixture model ready');
+  await pip.close();
+  await expect(page.getByRole('button', { name: 'Open inference picture-in-picture' })).toBeVisible();
+  await expect(page.getByRole('complementary', { name: 'Runtime', exact: true })).toBeVisible();
+  await expect(page.getByText('32.5', { exact: true })).toBeVisible();
+});
+
+test('picture-in-picture rejection leaves runtime on the page', async ({ page }) => {
+  await page.addInitScript(() => Object.defineProperty(window, 'documentPictureInPicture', {
+    value: { requestWindow: () => Promise.reject(new Error('Permission denied')) },
+  }));
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Open inference picture-in-picture' }).click();
+  await expect(page.getByRole('alert')).toContainText('Permission denied');
+  await expect(page.getByRole('complementary', { name: 'Runtime', exact: true })).toBeVisible();
+});

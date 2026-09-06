@@ -1,6 +1,7 @@
 import { Activity, Check, CircleHelp, Copy, FileTerminal, Radio, RefreshCw, Terminal, Trash2 } from 'lucide-react';
 import type { Capabilities, LogEntry, ServerStatus, Throughput } from '../../shared/types';
 import { catalog, fieldSupported } from '../../shared/config';
+import { RuntimePictureInPicture } from './RuntimePictureInPicture';
 
 export function RuntimePanel({ connected, status, throughput, logs, clearLogs, notify, preview, canPreview, probe, capabilities, busy }: {
   connected: boolean; status: ServerStatus | null; throughput: Throughput | null; logs: LogEntry[];
@@ -16,6 +17,7 @@ export function RuntimePanel({ connected, status, throughput, logs, clearLogs, n
   };
   const supported = capabilities ? catalog.fields.filter(field => fieldSupported(field, capabilities.flags)).length : 0;
   return <aside className="runtime-panel" aria-label="Runtime">
+    <RuntimePictureInPicture notify={notify}>
     <section className="runtime-card"><div className="runtime-heading"><h2><Activity size={16} />Inference</h2><span className={`status-pill ${connected ? 'live' : ''}`}><span className="tiny-dot" />{connected ? 'LIVE' : 'OFFLINE'}</span></div>
       <p className="runtime-description">Measured throughput, not estimates.</p>
       <div className="metrics-grid"><div><span>Prompt processing <abbr title="Prompt processing">PP</abbr></span><strong>{metric(throughput?.pp)}</strong><small>{throughput?.pp == null ? 'Unavailable · tokens/sec' : 'tokens/sec'}</small></div><div><span>Token generation <abbr title="Token generation">TG</abbr></span><strong>{metric(throughput?.tg)}</strong><small>{throughput?.tg == null ? 'Unavailable · tokens/sec' : 'tokens/sec'}</small></div></div>
@@ -25,6 +27,7 @@ export function RuntimePanel({ connected, status, throughput, logs, clearLogs, n
             : 'Waiting for an inference request'}</div>
       {throughput && <div className="token-counts"><span>Input <strong>{throughput.inputTokens ?? '—'}</strong></span><span>Output <strong>{throughput.outputTokens ?? '—'}</strong></span></div>}
     </section>
+    </RuntimePictureInPicture>
     <section className="runtime-card executable-card"><div className="runtime-heading"><h2><FileTerminal size={16} />Executable</h2></div>
       <p className="runtime-description">{capabilities ? `${supported} of ${catalog.fields.length} settings supported by this build.` : 'Check your llama.cpp build for compatible flags and aliases.'}</p>
       {capabilities && <div className={`capability-result ${supported === catalog.fields.length ? 'success' : ''}`}>{supported === catalog.fields.length ? <Check size={14} /> : <CircleHelp size={14} />}{supported === catalog.fields.length ? 'All catalog fields supported' : `${catalog.fields.length - supported} unsupported fields marked in the editor`}</div>}

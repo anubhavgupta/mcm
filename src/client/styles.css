@@ -484,3 +484,11 @@ svg { flex-shrink: 0; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
 }
+.runtime-container { min-width: 0; }
+.runtime-pip-trigger { width: 100%; margin-bottom: 12px; }
+.runtime-pip-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 12px; }
+.runtime-pip-toolbar strong { font-size: 14px; }
+.runtime-detached { padding: 12px; min-width: 0; }
+.runtime-detached .runtime-panel { position: static; display: flex; flex-direction: column; margin: 0; }
+.runtime-pip-document { margin: 0; min-width: 0; overflow: auto; }
+.runtime-floating { position: fixed; z-index: 40; right: 16px; bottom: 16px; width: min(380px, calc(100vw - 32px)); max-height: calc(100dvh - 32px); overflow: auto; background: #f7f9f3; border: 1px solid #cdd8c5; border-radius: 12px; box-shadow: 0 12px 48px #182b2433; }

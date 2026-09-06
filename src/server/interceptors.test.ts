@@ -59,4 +59,40 @@ describe('bounded native timing observation', () => {
     observer.onComplete(context);
     observer.close();
   });
+  it('keeps native rates stable across zero server gauges and partial timing events', async () => {
+    const events = new Events();
+    const emit = vi.spyOn(events, 'emit');
+    const fetcher = vi.fn<typeof fetch>().mockImplementation(async () =>
+      new Response('llamacpp:prompt_tokens_seconds 0\nllamacpp:predicted_tokens_seconds 0\n'));
+    const observer = new ThroughputInterceptor(events, () => 'http://localhost:8080', fetcher, 10);
+    try {
+      observer.onRequest(context);
+      observer.onResponse(context, { status: 200, headers: { 'content-type': 'text/event-stream' } });
+      const send = (timings: object) => observer.onResponseChunk(context, Buffer.from(`data: ${JSON.stringify({ timings })}\n\n`));
+      send({ prompt_per_second: 120, predicted_per_second: 30, prompt_n: 10, predicted_n: 4 });
+      await vi.waitFor(() => expect(fetcher.mock.calls.length).toBeGreaterThanOrEqual(2));
+      send({ prompt_n: 0, prompt_per_second: 0, predicted_n: 0, predicted_per_second: 0 });
+      send({ predicted_n: 6, predicted_per_second: 32 });
+      observer.onComplete(context);
+      const values = emit.mock.calls.map(([event]) => event).filter(event => event.type === 'throughput');
+      expect(values.slice(1).every(event => event.data.pp === 120 && event.data.tg !== 0)).toBe(true);
+      expect(values.at(-1)).toMatchObject({ data: { pp: 120, tg: 32, measurement: 'timings', active: false } });
+    } finally { observer.close(); }
+  });
+  it('ignores discovery requests and keeps overlapping responses on the newest inference request', () => {
+    const events = new Events();
+    const emit = vi.spyOn(events, 'emit');
+    const observer = new ThroughputInterceptor(events, () => 'http://localhost:8080');
+    try {
+      const second = { ...context, requestId: 'two' };
+      observer.onRequest(context);
+      observer.onRequest(second);
+      const count = emit.mock.calls.length;
+      observer.onRequest({ ...context, requestId: 'models', method: 'GET', path: '/v1/models' });
+      observer.onComplete(context);
+      expect(emit.mock.calls.length).toBe(count);
+      observer.onComplete(second);
+      expect(emit.mock.calls.at(-1)?.[0]).toMatchObject({ data: { requestId: 'two', active: false } });
+    } finally { observer.close(); }
+  });
 });
