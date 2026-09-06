@@ -6,6 +6,13 @@ argument generation and share encoding live in `src/shared`.
 
 ## Management endpoints
 
+Management endpoints remain same-origin only. The inference proxy at `/v1`
+allows all browser origins without credentialed CORS, handles `OPTIONS`
+preflights locally, and permits requested API headers (including `Authorization`,
+`x-api-key`, and `anthropic-version`). Its CORS policy also applies to upstream
+errors and streaming responses. Upstream CORS headers do not override MCM's
+policy. Cross-origin cookies are not supported.
+
 - `GET /api/bootstrap` -> `Bootstrap` (hfToken NEVER returned)
 - `PUT /api/workspace`, Workspace body -> validated saved Workspace
 - `PUT /api/settings`, partial LocalSettings body, optional `clearHfToken: boolean` -> PublicSettings. Blank/absent hfToken preserves token. modelBindings maps model ID to relative path inside modelsDirectory.

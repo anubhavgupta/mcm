@@ -85,7 +85,7 @@ export class ProxyService {
       preparing = false;
       const headers = filteredHeaders(Object.fromEntries(Object.entries(outbound.headers).map(([key, value]) => [key.toLowerCase(), value])));
       headers.host = target.host;
-      // Disallow browser CORS broadening; credentials and protocol-specific headers otherwise pass through.
+      // MCM owns proxy CORS; upstream credentials and protocol-specific headers pass through.
       delete headers.origin;
       const body = outbound.body !== undefined ? Buffer.from(outbound.body) : originalBody;
       if (body !== undefined) {

@@ -128,7 +128,7 @@ test('creates groups and models with a real inherited false override', async ({ 
   await openNavigation(page);
   await page.getByRole('button', { name: 'New model', exact: true }).click();
   await page.getByRole('textbox', { name: 'Model name', exact: true }).fill('Writing model');
-  await page.getByRole('textbox', { name: 'GGUF filename', exact: true }).fill('mock-model.gguf');
+  await page.getByRole('combobox', { name: 'GGUF model', exact: true }).selectOption('mock-model.gguf');
   await page.getByRole('combobox', { name: 'Configuration group', exact: true }).selectOption({ label: 'Writing' });
   await page.getByRole('button', { name: 'Create model', exact: true }).click();
   await page.getByRole('button', { name: 'Override Jinja templates', exact: true }).click();
@@ -142,6 +142,31 @@ test('creates groups and models with a real inherited false override', async ({ 
       group: workspace.groups.find(group => group.id === model?.groupId)?.name,
     };
   }).toEqual({ jinja: false, group: 'Writing' });
+});
+
+test('selecting a discovered model fills its configuration name automatically', async ({ page, request }) => {
+  await page.goto('/');
+  await openNavigation(page);
+  await page.getByRole('button', { name: 'New model', exact: true }).click();
+  await page.getByRole('combobox', { name: 'GGUF model', exact: true }).selectOption('mock-model.gguf');
+  await expect(page.getByRole('textbox', { name: 'Model name', exact: true })).toHaveValue('mock-model');
+  await page.getByRole('button', { name: 'Create model', exact: true }).click();
+  await expect.poll(async () => (await bootstrap(request)).workspace.models.find(model => model.name === 'mock-model')?.model.filename).toBe('mock-model.gguf');
+});
+
+test('model discovery errors can be retried without entering a filename', async ({ page }) => {
+  let fail = true;
+  await page.route('**/api/models', route => route.fulfill(fail
+    ? { status: 400, json: { error: 'Models directory is missing.' } }
+    : { json: { models: [{ filename: 'restored.gguf', relativePath: 'restored.gguf', size: 123 }] } }));
+  await page.goto('/');
+  await openNavigation(page);
+  await page.getByRole('button', { name: 'New model', exact: true }).click();
+  await expect(page.getByRole('alert')).toContainText('Models directory is missing');
+  fail = false;
+  await page.getByRole('button', { name: 'Refresh models', exact: true }).click();
+  await page.getByRole('combobox', { name: 'GGUF model', exact: true }).selectOption('restored.gguf');
+  await expect(page.getByRole('textbox', { name: 'Model name', exact: true })).toHaveValue('restored');
 });
 
 test('Hugging Face exchange requires explicit push and confirmed pull', async ({ page, request }) => {

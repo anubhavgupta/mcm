@@ -34,8 +34,9 @@ is not the type checker.
 
 1. Open **Machine settings** and enter the executable path and local models directory.
 2. Set the llama-server port. This is separate from MCM's HTTP port.
-3. Add a model configuration with a portable GGUF filename, optionally an
-   upstream Hugging Face model repository identifier.
+3. Add a model configuration by selecting a discovered GGUF model from the
+   dropdown. Its configuration name is filled automatically and can be customized.
+   Optionally add an upstream Hugging Face model repository identifier.
 4. Assign the model to an optional group and set only the overrides it needs.
 5. Map its portable identity to a local GGUF file if its filename is ambiguous
    or differs on your machine.
@@ -114,6 +115,15 @@ directory and its backups. Network credentials are used only for the explicitly
 requested Hugging Face operation.
 
 ## Streaming inference gateway
+
+The `/v1` proxy accepts cross-origin browser requests, including `OPTIONS`
+preflights and OpenAI/Anthropic authentication headers. Configure browser clients
+with `credentials: 'omit'` (or the default `same-origin`); cross-origin cookies
+and credentialed CORS are not supported. Management endpoints under `/api`
+remain same-origin only. Any website can make inference requests to this local
+proxy if the browser permits local-network access, so avoid leaving it running
+while browsing untrusted sites. Browser local-network permission prompts and
+HTTPS/mixed-content restrictions still apply; CORS does not bypass them.
 
 Point API clients at `http://localhost:7838/v1`. The destination defaults to
 the managed llama-server at `http://127.0.0.1:<serverPort>`. Machine settings may

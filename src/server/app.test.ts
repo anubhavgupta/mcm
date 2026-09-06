@@ -95,6 +95,64 @@ describe('management API validation and privacy', () => {
 });
 
 describe('streaming protocol passthrough', () => {
+  it('handles cross-origin preflight locally with OpenAI and Anthropic client headers', async () => {
+    const upstreamCalls = vi.fn();
+    const upstream = await listen((_request, response) => { upstreamCalls(); response.end(); });
+    const base = await app(upstream);
+    for (const path of ['/v1/chat/completions', '/v1/messages']) {
+      const headers = 'content-type, authorization, x-api-key, anthropic-version, anthropic-dangerous-direct-browser-access';
+      const response = await fetch(`${base}${path}`, {
+        method: 'OPTIONS',
+        headers: {
+          Origin: 'http://localhost:3000', 'Sec-Fetch-Site': 'cross-site',
+          'Access-Control-Request-Method': 'POST', 'Access-Control-Request-Headers': headers,
+        },
+      });
+      expect(response.status).toBe(204);
+      expect(response.headers.get('access-control-allow-origin')).toBe('*');
+      expect(response.headers.get('access-control-allow-methods')).toContain('POST');
+      expect(response.headers.get('access-control-allow-headers')).toBe(headers);
+      expect(response.headers.get('access-control-allow-credentials')).toBeNull();
+      expect(response.headers.get('vary')).toContain('Access-Control-Request-Headers');
+    }
+    expect(upstreamCalls).not.toHaveBeenCalled();
+  });
+  it.each(['/v1/chat/completions', '/v1/messages'])('allows cross-origin streaming at %s without trusting upstream CORS', async path => {
+    const upstream = await listen((_request, response) => {
+      response.writeHead(200, {
+        'Content-Type': 'text/event-stream',
+        'Access-Control-Allow-Origin': 'https://other.example',
+        'Access-Control-Allow-Credentials': 'true',
+      });
+      response.end('data: {"text":"hello"}\n\ndata: [DONE]\n\n');
+    });
+    const base = await app(upstream);
+    const response = await fetch(`${base}${path}`, {
+      method: 'POST', headers: { Origin: 'https://client.example', 'Sec-Fetch-Site': 'cross-site' }, body: '{}',
+    });
+    expect(response.status).toBe(200);
+    expect(response.headers.get('access-control-allow-origin')).toBe('*');
+    expect(response.headers.get('access-control-allow-credentials')).toBeNull();
+    expect(await response.text()).toContain('data: [DONE]');
+  });
+  it('includes CORS on proxy errors but keeps management endpoints protected', async () => {
+    const base = await app('http://127.0.0.1:1');
+    const headers = { Origin: 'http://localhost:3000' };
+    const failed = await fetch(`${base}/v1/messages`, { method: 'POST', headers, body: '{}' });
+    expect(failed.status).toBe(502);
+    expect(failed.headers.get('access-control-allow-origin')).toBe('*');
+    for (const path of ['/api/settings', '/api/launch', '/api/bootstrap', '/v10/messages']) {
+      for (const method of ['OPTIONS', 'POST']) {
+        const response = await fetch(`${base}${path}`, { method, headers });
+        expect(response.status).toBe(403);
+        expect(response.headers.get('access-control-allow-origin')).toBeNull();
+      }
+    }
+    const unsupported = await fetch(`${base}/v1/messages`, {
+      method: 'OPTIONS', headers: { ...headers, 'Access-Control-Request-Method': 'TRACE' },
+    });
+    expect(unsupported.status).toBe(405);
+  });
   it('strips standard and connection-nominated hop headers', () => {
     expect(filteredHeaders({ connection: 'keep-alive, x-private', 'x-private': 'remove', 'keep-alive': 'timeout=1', authorization: 'Bearer user', 'anthropic-version': '2023-06-01', 'x-keep': 'yes' }))
       .toEqual({ authorization: 'Bearer user', 'anthropic-version': '2023-06-01', 'x-keep': 'yes' });

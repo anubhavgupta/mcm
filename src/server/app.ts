@@ -19,12 +19,17 @@ export interface AppOptions {
   metricsPollMs?: number;
 }
 
-const guard: RequestHandler = (request, response, next) => {
+const hostGuard: RequestHandler = (request, response, next) => {
   const host = request.headers.host;
   if (!host || !/^(?:localhost|127\.0\.0\.1|\[::1\])(?::\d{1,5})?$/i.test(host)) {
     response.status(403).json({ error: 'MCM accepts only localhost requests.' });
     return;
   }
+  next();
+};
+
+const guard: RequestHandler = (request, response, next) => {
+  const host = request.headers.host;
   const origin = request.headers.origin;
   if ((origin && origin !== `${request.protocol}://${host}`) ||
     request.headers['sec-fetch-site'] === 'cross-site') {
@@ -32,6 +37,32 @@ const guard: RequestHandler = (request, response, next) => {
     return;
   }
   next();
+};
+
+const proxyMethods = ['GET', 'POST', 'DELETE', 'PUT', 'PATCH', 'HEAD'];
+const proxyCors: RequestHandler = (request, response, next) => {
+  if (request.headers.origin) {
+    response.setHeader('Access-Control-Allow-Origin', '*');
+    response.setHeader('Access-Control-Expose-Headers', '*');
+  }
+  if (request.method !== 'OPTIONS') { next(); return; }
+
+  response.vary('Access-Control-Request-Method');
+  response.vary('Access-Control-Request-Headers');
+  const method = request.get('Access-Control-Request-Method');
+  if (method && !proxyMethods.includes(method)) {
+    response.status(405).json({ error: 'Unsupported proxy method.' });
+    return;
+  }
+  const headers = request.get('Access-Control-Request-Headers');
+  if (headers && !headers.split(',').every(header => /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/.test(header.trim()))) {
+    response.status(400).json({ error: 'Invalid preflight request headers.' });
+    return;
+  }
+  response.setHeader('Access-Control-Allow-Methods', proxyMethods.join(', '));
+  if (headers) response.setHeader('Access-Control-Allow-Headers', headers);
+  response.setHeader('Access-Control-Max-Age', '600');
+  response.status(204).end();
 };
 
 const modelRequest = z.object({ modelId: z.string().regex(/^[a-zA-Z0-9_-]{1,100}$/) }).strict();
@@ -52,20 +83,21 @@ export async function createApp(options: AppOptions) {
   const hub = new HuggingFace(store, options.hub);
   const app = express();
   app.disable('x-powered-by');
-  app.use(guard);
+  app.use(hostGuard);
   app.use((request, response, next) => {
     response.setHeader('X-Content-Type-Options', 'nosniff');
     response.setHeader('Referrer-Policy', 'no-referrer');
     next();
   });
   // Proxy precedes body parsing so uploads and SSE never require whole-body buffering.
-  app.use('/v1', (request, response) => {
-    if (!['GET', 'POST', 'DELETE', 'PUT', 'PATCH', 'HEAD'].includes(request.method)) {
+  app.use('/v1', proxyCors, (request, response) => {
+    if (!proxyMethods.includes(request.method)) {
       response.status(405).json({ error: 'Unsupported proxy method.' }); return;
     }
     // Express mount trims request.url; ProxyService uses the original URL for routing.
     return proxy.handle(request, response);
   });
+  app.use(guard);
   app.use('/api', express.json({ limit: '2mb', strict: true }));
   app.get('/api/bootstrap', (_request, response) => {
     response.json({ workspace: store.getWorkspace(), settings: store.publicSettings(), status: manager.getStatus() });

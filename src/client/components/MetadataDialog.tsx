@@ -1,7 +1,9 @@
+import { useEffect, useState } from 'react';
 import { useForm } from 'react-hook-form';
-import { Box, Folder, Trash2 } from 'lucide-react';
+import { Box, Folder, RefreshCw, Trash2 } from 'lucide-react';
 import { repoSchema } from '../../shared/config';
-import type { ConfigGroup, ModelConfig, Workspace } from '../../shared/types';
+import type { ConfigGroup, ModelConfig, ModelFile, Workspace } from '../../shared/types';
+import { api, errorMessage } from '../api';
 import { Dialog } from './Dialog';
 import { useUnsavedWarning } from '../hooks/useUnsavedWarning';
 
@@ -18,6 +20,22 @@ export function MetadataDialog({ target, workspace, onClose, onSave, onDelete, b
   const form = useForm<MetadataValues>({
     defaultValues: { name: target.item?.name ?? '', filename: model?.model.filename ?? '', repo: model?.model.repo ?? '', groupId: model?.groupId ?? '' },
   });
+  const [files, setFiles] = useState<ModelFile[]>([]);
+  const [discovery, setDiscovery] = useState({ loading: isModel, error: '' });
+  const [refresh, setRefresh] = useState(0);
+  useEffect(() => {
+    if (!isModel) return;
+    const controller = new AbortController();
+    setDiscovery({ loading: true, error: '' });
+    void api<{ models: ModelFile[] }>('/models', { signal: controller.signal }).then(result => {
+      setFiles(result.models);
+      setDiscovery({ loading: false, error: '' });
+    }).catch(error => {
+      if (!controller.signal.aborted) setDiscovery({ loading: false, error: errorMessage(error) });
+    });
+    return () => controller.abort();
+  }, [isModel, refresh]);
+  const filenames = [...new Set(files.map(file => file.filename))];
   useUnsavedWarning(form.formState.isDirty);
   const close = () => {
     if (busy) return;
@@ -28,7 +46,25 @@ export function MetadataDialog({ target, workspace, onClose, onSave, onDelete, b
       <div className="form-field"><label htmlFor="entity-name">{isModel ? 'Model name' : 'Group name'}</label><input id="entity-name" autoFocus placeholder={isModel ? 'e.g. My coding model' : 'e.g. Creative writing'} {...form.register('name', { required: 'A name is required.', maxLength: { value: 120, message: 'Use 120 characters or fewer.' }, validate: value => !!value.trim() || 'A name is required.' })} aria-invalid={!!form.formState.errors.name} />
         {form.formState.errors.name && <p className="field-error" role="alert">{form.formState.errors.name.message}</p>}</div>
       {isModel && <>
-        <div className="form-field"><label htmlFor="model-filename">GGUF filename</label><input id="model-filename" placeholder="model-Q4_K_M.gguf" {...form.register('filename', { required: 'A GGUF filename is required.', maxLength: { value: 255, message: 'Use 255 characters or fewer.' }, pattern: { value: /^[^/\\:\x00-\x1f]+\.gguf$/i, message: 'Enter a portable .gguf filename, not a full path.' } })} aria-invalid={!!form.formState.errors.filename} /><p className="field-help">Filename only. Bind a discovered local file in Machine settings.</p>
+        <div className="form-field"><label htmlFor="model-filename">GGUF model</label><select id="model-filename" disabled={discovery.loading || busy} {...form.register('filename', {
+          required: 'Select a GGUF model.',
+          maxLength: { value: 255, message: 'Use 255 characters or fewer.' },
+          pattern: { value: /^[^/\\:\x00-\x1f]+\.gguf$/i, message: 'Select a portable GGUF filename.' },
+          onChange: (event: React.ChangeEvent<HTMLSelectElement>) => {
+            const filename = event.target.value;
+            if (!form.getValues('name').trim() || (!target.item && !form.getFieldState('name').isDirty)) {
+              form.setValue('name', filename.replace(/\.gguf$/i, ''), { shouldValidate: true });
+            }
+          },
+        })} aria-invalid={!!form.formState.errors.filename}>
+          <option value="">{discovery.loading ? 'Loading models...' : 'Select a model'}</option>
+          {model && !filenames.includes(model.model.filename) && <option value={model.model.filename}>{model.model.filename} (not in discovery)</option>}
+          {filenames.map(filename => <option key={filename} value={filename}>{filename}</option>)}
+        </select>
+          <button type="button" className="text-button" disabled={discovery.loading || busy} onClick={() => setRefresh(value => value + 1)}><RefreshCw size={14} />Refresh models</button>
+          {discovery.error && <p className="inline-error" role="alert">{discovery.error} Configure the models directory in Machine settings, then refresh.</p>}
+          {!discovery.loading && !discovery.error && files.length === 0 && <p className="field-help">No GGUF models found. Set your models directory in Machine settings or add GGUF files, then refresh.</p>}
+          <p className="field-help">Models come from your saved models directory. If multiple files share a filename, choose the exact local file in Machine settings.</p>
           {form.formState.errors.filename && <p className="field-error" role="alert">{form.formState.errors.filename.message}</p>}</div>
         <div className="form-field"><label htmlFor="model-repo">Hugging Face model repository <span aria-hidden="true">optional</span></label><input id="model-repo" placeholder="owner/model-GGUF" {...form.register('repo', { validate: value => !value || repoSchema.safeParse(value).success || 'Use owner/repository.' })} aria-invalid={!!form.formState.errors.repo} />
           {form.formState.errors.repo && <p className="field-error" role="alert">{form.formState.errors.repo.message}</p>}</div>
