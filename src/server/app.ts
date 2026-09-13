@@ -193,13 +193,15 @@ export async function createApp(options: AppOptions) {
   async function close(): Promise<void> {
     if (closed) return;
     closed = true;
-    try {
-      await interceptors.close();
-      await proxy.close();
-      throughput.close();
-      await manager.close();
-      await usage.close();
-    } finally { events.close(); }
+    const errors: unknown[] = [];
+    for (const cleanup of [
+      () => store.close(), () => interceptors.close(), () => proxy.close(), () => throughput.close(),
+      () => manager.close(), () => usage.close(), () => events.close(),
+    ]) {
+      try { await cleanup(); } catch (error) { errors.push(error); }
+    }
+    if (errors.length === 1) throw errors[0];
+    if (errors.length > 1) throw new AggregateError(errors, 'MCM could not complete every shutdown operation.');
   }
   return { app, store, manager, events, usage, close };
 }

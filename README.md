@@ -30,6 +30,29 @@ The backend runs TypeScript with `tsx`; the client is bundled into `dist/client`
 preview build is pinned in `package.json` and the lockfile; the frontend bundler
 is not the type checker.
 
+### Native desktop (Windows / Linux)
+
+MCM also runs in a **native desktop window using Deno 2.9.6 and its Laufey
+WebView backend**: WebView2 on Windows and WebKitGTK 4.1 on Linux. This is not
+an external-browser shortcut, Electron, or a second implementation of MCM.
+The same Express backend serves the existing React UI, management API, proxy,
+SSE, configurations, themes, interceptors and managed llama-server processes.
+
+```sh
+npm ci
+npm run desktop
+```
+
+This builds the existing frontend, packages the native app, and opens its window.
+Development and packaging require Node/npm; **distributed apps need neither
+Node nor a separately installed Deno**. An existing compatible `llama-server`
+and local models are still required for inference.
+
+See [Native desktop setup, distribution and validation](docs/desktop.md) for
+platform libraries, Windows/Linux bundle commands, data locations, permissions,
+and WebView limitations. Existing `npm start`, `npm run dev`, and browser mode
+remain unchanged.
+
 ## First launch
 
 1. Open **Machine settings**, enter the executable path, and press **Check version**.

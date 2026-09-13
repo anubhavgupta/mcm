@@ -71,9 +71,11 @@ describe('private bounded version discovery', () => {
     vi.stubEnv('HUGGING_FACE_HUB_TOKEN', 'hf_private');
     vi.stubEnv('HUGGINGFACE_TOKEN', 'hf_private');
     vi.stubEnv('OTHER_SECRET', 'hf_private');
+    vi.stubEnv('DENO_SERVE_ADDRESS', 'tcp:127.0.0.1:45678');
+    vi.stubEnv('MCM_DESKTOP_SMOKE', '1');
     const path = await fixture(`
       if (process.argv.slice(2).join() !== '--version') process.exit(9);
-      if (['HF_TOKEN', 'HUGGING_FACE_HUB_TOKEN', 'HUGGINGFACE_TOKEN', 'OTHER_SECRET'].some(key => process.env[key])) process.exit(8);
+      if (['HF_TOKEN', 'HUGGING_FACE_HUB_TOKEN', 'HUGGINGFACE_TOKEN', 'OTHER_SECRET', 'DENO_SERVE_ADDRESS', 'MCM_DESKTOP_SMOKE'].some(key => process.env[key])) process.exit(8);
       process.${stream}.write('CUDA init: /private/build hf_private\\nversion: 12345 (abcdef)\\nbuilt at /private/user\\n');
     `);
     await store.saveSettings({ executablePath: path, hfToken: 'hf_private' });

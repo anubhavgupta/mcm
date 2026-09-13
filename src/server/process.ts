@@ -24,7 +24,7 @@ export interface ProcessOptions {
 
 function childEnvironment(settings: LocalSettings): NodeJS.ProcessEnv {
   return Object.fromEntries(Object.entries(process.env).filter(([key, value]) =>
-    !/^(HF_TOKEN|HUGGING_FACE_HUB_TOKEN|HUGGINGFACE_TOKEN|MCM_INTERCEPTOR_MODULE)$/i.test(key) &&
+    !/^(HF_TOKEN|HUGGING_FACE_HUB_TOKEN|HUGGINGFACE_TOKEN|MCM_INTERCEPTOR_MODULE|DENO_SERVE_ADDRESS|MCM_DESKTOP_SMOKE)$/i.test(key) &&
     (!settings.hfToken || value !== settings.hfToken)));
 }
 

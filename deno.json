@@ -1,0 +1,20 @@
+{
+  "nodeModulesDir": "manual",
+  "compilerOptions": {
+    "strict": true
+  },
+  "unstable": ["sloppy-imports"],
+  "tasks": {
+    "desktop": "./node_modules/deno/deno run -A desktop/launch.ts",
+    "desktop:dev": "./node_modules/deno/deno run -A desktop/build.ts dev",
+    "desktop:check": "./node_modules/deno/deno check --desktop desktop/main.ts desktop/launch.ts desktop/build.ts desktop/smoke.ts",
+    "desktop:test": "./node_modules/deno/deno run -A desktop/smoke.ts",
+    "desktop:build:linux": "./node_modules/deno/deno run -A desktop/build.ts linux",
+    "desktop:build:windows": "./node_modules/deno/deno run -A desktop/build.ts windows"
+  },
+  "desktop": {
+    "app": { "name": "MCM", "identifier": "io.github.mcm.desktop" },
+    "backend": "webview",
+    "output": { "linux": "dist/desktop/linux/MCM", "windows": "dist/desktop/windows/MCM" }
+  }
+}

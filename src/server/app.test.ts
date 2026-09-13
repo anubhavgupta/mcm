@@ -36,6 +36,26 @@ afterEach(async () => {
   await rm(directory, { recursive: true, force: true });
 });
 
+describe('runtime shutdown', () => {
+  it('flushes queued settings before releasing the runtime and rejects later writes', async () => {
+    await app();
+    const pending = runtime!.store.saveSettings({ theme: 'nord' });
+    await runtime!.close();
+    await pending;
+    expect(JSON.parse(await readFile(join(directory, 'settings.json'), 'utf8')).theme).toBe('nord');
+    await expect(runtime!.store.saveSettings({ theme: 'dracula' })).rejects.toThrow('shutting down');
+  });
+  it('still flushes usage and closes events if process cleanup fails', async () => {
+    await app();
+    const usageClose = vi.spyOn(runtime!.usage, 'close');
+    const eventsClose = vi.spyOn(runtime!.events, 'close');
+    vi.spyOn(runtime!.manager, 'close').mockRejectedValueOnce(new Error('Process cleanup failed'));
+    await expect(runtime!.close()).rejects.toThrow('Process cleanup failed');
+    expect(usageClose).toHaveBeenCalledOnce();
+    expect(eventsClose).toHaveBeenCalledOnce();
+  });
+});
+
 describe('management API validation and privacy', () => {
   it('validates machine themes without exposing them in portable workspace data', async () => {
     const base = await app();

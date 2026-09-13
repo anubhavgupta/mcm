@@ -5,6 +5,7 @@ import { z } from 'zod';
 import { emptyWorkspace, repoSchema, workspaceSchema } from '../shared/config';
 import type { LocalSettings, PublicSettings, Workspace } from '../shared/types';
 import { defaultTheme, themeSchema } from '../shared/themes';
+import { ApiError } from './errors';
 
 export const relativeBinding = z.string().min(1).max(4096).refine(value =>
   !isAbsolute(value) && !value.includes('\\') && !value.includes(':') && !value.includes('\0') &&
@@ -79,6 +80,7 @@ export class Store {
   private workspace: Workspace = emptyWorkspace();
   private settings: LocalSettings = structuredClone(defaultSettings);
   private queue: Promise<unknown> = Promise.resolve();
+  private closing = false;
   constructor(readonly directory: string) {}
   async init(): Promise<void> {
     await mkdir(this.directory, { recursive: true, mode: 0o700 });
@@ -101,9 +103,14 @@ export class Store {
     await atomicJson(this.directory, name, data);
   }
   private serialize<T>(fn: () => Promise<T>): Promise<T> {
+    if (this.closing) return Promise.reject(new ApiError(503, 'Manager is shutting down.'));
     const operation = this.queue.then(fn);
     this.queue = operation.catch(() => {});
     return operation;
+  }
+  async close(): Promise<void> {
+    this.closing = true;
+    await this.queue;
   }
   getWorkspace(): Workspace { return structuredClone(this.workspace); }
   getSettings(): LocalSettings { return structuredClone(this.settings); }
