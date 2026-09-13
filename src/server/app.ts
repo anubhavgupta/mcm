@@ -11,6 +11,7 @@ import { HuggingFace, type HubOptions } from './huggingface';
 import { ThroughputInterceptor, type Interceptor } from './interceptors';
 import { ProxyService } from './proxy';
 import { UsageInterceptor, UsageStore } from './usage';
+import { InterceptorRegistry } from './interceptor-pipeline';
 
 export interface AppOptions {
   dataDir: string;
@@ -106,7 +107,9 @@ export async function createApp(options: AppOptions) {
       managedModelId: targetsManagedServer ? manager.getStatus().modelId : undefined,
     };
   });
-  const proxy = new ProxyService(upstream, [throughput, accounting, ...options.interceptors ?? []], events,
+  const interceptors = new InterceptorRegistry(options.dataDir, [throughput, accounting], options.interceptors);
+  await interceptors.init();
+  const proxy = new ProxyService(upstream, () => interceptors.snapshot(), events,
     () => store.getSettings().anthropicMode ?? 'passthrough');
   const hub = new HuggingFace(store, options.hub);
   const app = express();
@@ -130,6 +133,8 @@ export async function createApp(options: AppOptions) {
     response.json({ workspace: store.getWorkspace(), settings: store.publicSettings(), status: manager.getStatus(), usage: usage.getSummary() });
   });
   app.get('/api/usage', (_request, response) => { response.json(usage.getSummary()); });
+  app.get('/api/interceptors', (_request, response) => { response.json(interceptors.get()); });
+  app.put('/api/interceptors', async (request, response) => { response.json(await interceptors.update(request.body)); });
   app.put('/api/workspace', async (request, response) => { response.json(await store.saveWorkspace(request.body)); });
   app.put('/api/settings', async (request, response) => { response.json(await store.saveSettings(request.body)); });
   app.get('/api/models', async (_request, response) => {
@@ -189,6 +194,7 @@ export async function createApp(options: AppOptions) {
     if (closed) return;
     closed = true;
     try {
+      await interceptors.close();
       await proxy.close();
       throughput.close();
       await manager.close();

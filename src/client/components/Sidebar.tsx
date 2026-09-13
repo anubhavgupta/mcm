@@ -1,13 +1,13 @@
-import { Box, ChevronLeft, Folder, Layers3, Plus, Settings2, Share2, X } from 'lucide-react';
+import { Box, ChevronLeft, Folder, Layers3, Plus, Settings2, Share2, Workflow, X } from 'lucide-react';
 import { useEffect, useRef } from 'react';
 import type { Workspace } from '../../shared/types';
 
 export type Selection = { kind: 'base' } | { kind: 'group' | 'model'; id: string };
 
-export function Sidebar({ workspace, selection, select, open, close, collapsed, toggleCollapsed, create, settings, share }: {
+export function Sidebar({ workspace, selection, select, open, close, collapsed, toggleCollapsed, create, settings, share, interceptors }: {
   workspace: Workspace; selection: Selection; select: (value: Selection) => void;
   open: boolean; close: () => void; collapsed: boolean; toggleCollapsed: () => void;
-  create: (kind: 'model' | 'group') => void; settings: () => void; share: () => void;
+  create: (kind: 'model' | 'group') => void; settings: () => void; share: () => void; interceptors: () => void;
 }) {
   const sidebar = useRef<HTMLElement>(null);
   useEffect(() => {
@@ -54,6 +54,7 @@ export function Sidebar({ workspace, selection, select, open, close, collapsed, 
         <button className="text-button" onClick={() => create('group')} title="New group"><Folder size={15} /><span>New group</span></button>
       </div>
       <div className="sidebar-footer">
+        <button className="nav-item" onClick={interceptors} title="Interceptors" aria-label="Interceptors"><Workflow size={17} /><span>Interceptors</span></button>
         <button className="nav-item" onClick={share} title="Share workspace"><Share2 size={17} /><span>Share workspace</span></button>
         <button className="nav-item" onClick={settings} title="Machine settings"><Settings2 size={17} /><span>Machine settings</span></button>
         <div className="local-note"><span className="tiny-dot" />Local-first. Yours to configure.<small>MCM / 2.0</small></div>

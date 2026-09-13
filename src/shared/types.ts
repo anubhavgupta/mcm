@@ -69,6 +69,19 @@ export interface LocalSettings {
   hfToken?: string;
 }
 export type PublicSettings = Omit<LocalSettings, 'hfToken'> & { hfTokenConfigured: boolean };
+export interface CustomInterceptorEntry {
+  id: string;
+  name: string;
+  modulePath: string;
+}
+export type InterceptorEntry =
+  | (CustomInterceptorEntry & { source: 'local'; locked: false })
+  | { id: string; name: string; source: 'builtin' | 'environment'; locked: true };
+export interface InterceptorPipeline { entries: InterceptorEntry[] }
+export interface InterceptorPipelineUpdate {
+  entries: CustomInterceptorEntry[];
+  trustedCodeAcknowledged: true;
+}
 export interface ModelFile { filename: string; relativePath: string; size: number }
 export interface Capabilities { flags: string[]; help: string; version?: string; compatibilityWarning?: string }
 export type ProcessPhase = 'stopped' | 'starting' | 'ready' | 'stopping' | 'failed';

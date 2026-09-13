@@ -11,11 +11,12 @@ import { ImportDialog } from './components/ImportDialog';
 import { MetadataDialog, type MetadataTarget } from './components/MetadataDialog';
 import { RuntimePanel } from './components/RuntimePanel';
 import { SettingsDialog } from './components/SettingsDialog';
+import { InterceptorsDialog } from './components/InterceptorsDialog';
 import { ShareDialog, validateWorkspace } from './components/ShareDialog';
 import { Sidebar, type Selection } from './components/Sidebar';
 import { FeedbackContext } from './components/Feedback';
 
-type Modal = { kind: 'metadata'; target: MetadataTarget } | { kind: 'settings' } | { kind: 'share' }
+type Modal = { kind: 'metadata'; target: MetadataTarget } | { kind: 'settings' } | { kind: 'share' } | { kind: 'interceptors' }
   | { kind: 'import'; workspace: Workspace; source: string }
   | { kind: 'command'; executable: string; args: string[] } | null;
 
@@ -148,6 +149,7 @@ export default function App() {
     <Sidebar workspace={workspace} selection={selection} select={value => guard(() => { setSelection(value); setCapabilities(null); setEditorVersion(version => version + 1); setMobileNav(false); window.scrollTo({ top: 0 }); })}
       open={mobileNav} close={() => setMobileNav(false)} collapsed={collapsed} toggleCollapsed={() => setCollapsed(value => !value)}
       create={openCreate} settings={() => guard(() => { setMobileNav(false); setModal({ kind: 'settings' }); })}
+      interceptors={() => guard(() => { setMobileNav(false); setModal({ kind: 'interceptors' }); })}
       share={() => guard(() => { setMobileNav(false); setModal({ kind: 'share' }); })} />
     <div className="workspace-shell" inert={mobileNav}>
       <header className="topbar"><div className="breadcrumb"><button className="icon-button mobile-only" aria-label="Open navigation" onClick={() => setMobileNav(true)}><Menu size={21} /></button><span>Workspace</span><ChevronRight size={13} /><strong>{selection.kind === 'base' ? 'Base' : title}</strong></div>
@@ -199,6 +201,7 @@ export default function App() {
         }) };
       await persist(next); setSelection({ kind: 'base' }); setModal(null); notify(`${target.kind === 'model' ? 'Model' : 'Group'} deleted.`);
     })} />}
+    {modal?.kind === 'interceptors' && <InterceptorsDialog onClose={closeModal} />}
     {modal?.kind === 'settings' && <SettingsDialog settings={settings} workspace={workspace} busy={!!busy} onClose={closeModal} onSave={async (values, version) => run('settings', async () => {
       const bindings = Object.fromEntries(Object.entries(values.modelBindings).filter(([, value]) => value !== ''));
       const draftBindings = Object.fromEntries(Object.entries(values.draftModelBindings ?? {}).filter(([, value]) => value !== ''));

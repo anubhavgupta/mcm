@@ -1,30 +1,14 @@
-import { resolve, isAbsolute } from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { resolve } from 'node:path';
 import express from 'express';
 import { createApp } from './app';
-import type { Interceptor } from './interceptors';
-
-async function loadInterceptors(): Promise<Interceptor[]> {
-  const modulePath = process.env.MCM_INTERCEPTOR_MODULE;
-  if (!modulePath) return [];
-  if (!isAbsolute(modulePath)) throw new Error('MCM_INTERCEPTOR_MODULE must be an absolute trusted local module path.');
-  const module = await import(pathToFileURL(modulePath).href) as { default?: Interceptor | Interceptor[]; interceptors?: Interceptor[] };
-  const exported = module.interceptors ?? module.default;
-  const interceptors = Array.isArray(exported) ? exported : [exported];
-  const hooks = ['beforeRequest', 'onRequest', 'onOutboundRequest', 'onRequestChunk', 'onRequestEnd', 'onResponse', 'onResponseChunk', 'onComplete', 'onError'] as const;
-  if (interceptors.some(value => !value || typeof value !== 'object' ||
-    hooks.some(key => value[key] !== undefined && typeof value[key] !== 'function'))) {
-    throw new Error('Interceptor module must export an interceptors array or default-export Interceptor objects.');
-  }
-  return interceptors as Interceptor[];
-}
+import { loadInterceptorModule } from './interceptor-pipeline';
 
 async function main(): Promise<void> {
   const port = Number(process.env.MCM_PORT ?? 7838);
   if (!Number.isInteger(port) || port < 1024 || port > 65535) throw new Error('MCM_PORT must be an integer from 1024 to 65535.');
   const runtime = await createApp({
     dataDir: resolve(process.env.MCM_DATA_DIR ?? '.mcm'),
-    interceptors: await loadInterceptors(),
+    interceptors: process.env.MCM_INTERCEPTOR_MODULE ? await loadInterceptorModule(process.env.MCM_INTERCEPTOR_MODULE) : [],
   });
   let vite: import('vite').ViteDevServer | undefined;
   if (process.env.NODE_ENV === 'production') {

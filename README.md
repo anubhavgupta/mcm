@@ -350,11 +350,32 @@ request when clients run concurrently.
 
 ### Custom interceptors
 
-The backend exposes typed, trusted-code interceptor hooks. Configure
-`MCM_INTERCEPTOR_MODULE` with an absolute local module path to extend request
-preparation and response observation. Interceptors are not loaded from shared configuration, URLs or API
-request bodies. A module has the same privileges as the MCM process; do not load
-untrusted code. See [the API and extension reference](docs/API.md).
+Open **Interceptors** in the sidebar to add, remove, and sequence trusted local
+interceptors. Enter a **Friendly name** and **Absolute local module path**, confirm
+that you trust the code, then choose **Add interceptor**. Use each entry's
+**Move up**, **Move down**, or **Remove** controls and choose **Save interceptors**
+to persist and activate the complete sequence. Closing without saving discards
+the draft.
+
+**Token and cost telemetry** is a locked, always-enabled entry: both real PP/TG
+throughput and persisted token/cost accounting are required and cannot be removed
+or reordered. It runs first. Optional `MCM_INTERCEPTOR_MODULE` interceptors run
+next and appear as **Environment-configured interceptors**, also locked; unset
+the environment variable and restart to remove them. Your editable modules run
+afterwards in the saved order, including `beforeRequest` mutations. Each request
+keeps its original chain through completion even when the saved sequence changes.
+
+Modules execute with the MCM process's permissions, including access to files,
+credentials, and request data. **Never add untrusted files.** There is no code
+upload/editor or remote-URL loading. Only absolute paths on the MCM host are
+accepted. The separate owner-only `interceptors.json` file is local to the data
+directory, never included in workspace exports, links, or Hugging Face sharing.
+Modules are imported and validated before saving; failed validation or saving
+leaves the active chain unchanged. Imports themselves execute trusted code, so
+their side effects cannot be rolled back. Node caches module exports: **restart
+MCM after editing a module**, including after a failed import. Removing a module
+does not unload it from Node or undo its side effects. See
+[the API and extension reference](docs/API.md) for hooks, limits, and API details.
 
 An executable TypeScript example is included in `examples/request-tag.ts`:
 

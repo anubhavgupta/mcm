@@ -43,6 +43,12 @@ describe('loopback entrypoint and trusted interceptor modules', () => {
     const response = await fetch(`http://127.0.0.1:${port}/api/bootstrap`);
     expect(response.status).toBe(200);
     expect(await response.json()).toMatchObject({ status: { phase: 'stopped' }, settings: { hfTokenConfigured: false } });
+    const pipeline = await (await fetch(`http://127.0.0.1:${port}/api/interceptors`)).json();
+    expect(pipeline.entries).toEqual([
+      { id: 'builtin-telemetry', name: 'Token and cost telemetry', source: 'builtin', locked: true },
+      { id: 'environment-interceptors', name: 'Environment-configured interceptors', source: 'environment', locked: true },
+    ]);
+    expect(JSON.stringify(pipeline)).not.toContain(interceptor);
     const closed = once(child, 'close');
     child.kill('SIGTERM');
     const [code] = await closed;

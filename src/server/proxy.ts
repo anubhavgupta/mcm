@@ -26,10 +26,10 @@ export class ProxyService {
   private pending = new Set<AbortController>();
   private completions = new Set<Promise<void>>();
   private closing = false;
-  constructor(private upstream: () => string, private interceptors: Interceptor[], private events: Events,
+  constructor(private upstream: () => string, private interceptors: readonly Interceptor[] | (() => readonly Interceptor[]), private events: Events,
     private anthropicMode: () => 'passthrough' | 'openai' = () => 'passthrough') {}
-  private async observe<K extends keyof Interceptor>(hook: K, ...args: Parameters<NonNullable<Interceptor[K]>>): Promise<void> {
-    for (const interceptor of this.interceptors) {
+  private async observe<K extends keyof Interceptor>(interceptors: readonly Interceptor[], hook: K, ...args: Parameters<NonNullable<Interceptor[K]>>): Promise<void> {
+    for (const interceptor of interceptors) {
       try {
         const fn = interceptor[hook] as ((...args: unknown[]) => void | Promise<void>) | undefined;
         if (fn) await fn.apply(interceptor, args);
@@ -43,6 +43,9 @@ export class ProxyService {
       response.status(503).json({ error: 'Manager is shutting down.' });
       return;
     }
+    const interceptors = [...(typeof this.interceptors === 'function' ? this.interceptors() : this.interceptors)];
+    const observe = <K extends keyof Interceptor>(hook: K, ...args: Parameters<NonNullable<Interceptor[K]>>) =>
+      this.observe(interceptors, hook, ...args);
     const controller = new AbortController();
     this.pending.add(controller);
     let resolveCompletion!: () => void;
@@ -61,7 +64,7 @@ export class ProxyService {
     const cancel = (): void => { if (!completed && !response.writableFinished) controller.abort(); };
     request.once('aborted', cancel);
     response.once('close', cancel);
-    await this.observe('onRequest', context);
+    await observe('onRequest', context);
     try {
       const target = new URL(this.upstream());
       target.pathname = original.pathname;
@@ -86,7 +89,7 @@ export class ProxyService {
           return new Uint8Array(await readingBody);
         },
       };
-      for (const interceptor of this.interceptors) {
+      for (const interceptor of interceptors) {
         if (!interceptor.beforeRequest) continue;
         preparing = true;
         const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(30000)]);
@@ -137,7 +140,7 @@ export class ProxyService {
         if (outbound.body !== undefined) delete headers['content-encoding'];
         if (originalBody === undefined) request.resume();
       }
-      await this.observe('onOutboundRequest', context, Object.fromEntries(
+      await observe('onOutboundRequest', context, Object.fromEntries(
         Object.entries(headers).map(([key, value]) => [key, typeof value === 'number' ? String(value) : value]),
       ));
       const upstream = (target.protocol === 'https:' ? httpsRequest : httpRequest)(target, {
@@ -152,10 +155,10 @@ export class ProxyService {
       });
       const observer = new Transform({
         transform: (chunk: Buffer, _encoding: BufferEncoding, callback: TransformCallback) => {
-          this.observe('onRequestChunk', context, new Uint8Array(chunk)).then(() => callback(null, chunk), callback);
+          observe('onRequestChunk', context, new Uint8Array(chunk)).then(() => callback(null, chunk), callback);
         },
         flush: (callback: TransformCallback) => {
-          this.observe('onRequestEnd', context).then(() => callback(), callback);
+          observe('onRequestEnd', context).then(() => callback(), callback);
         },
       });
       const requestPiping = pipeline(body !== undefined ? Readable.from([body]) : request, observer, upstream).catch(error => {
@@ -170,7 +173,7 @@ export class ProxyService {
         if (key.startsWith('access-control-')) delete responseHeaders[key];
       }
       const responseContext: ResponseContext = { status: incoming.statusCode ?? 502, headers: incoming.headers };
-      await this.observe('onResponse', context, responseContext);
+      await observe('onResponse', context, responseContext);
       if (translating) {
         for (const key of ['content-length', 'content-encoding', 'content-md5', 'etag', 'digest']) delete responseHeaders[key];
       }
@@ -185,7 +188,7 @@ export class ProxyService {
       }
       const responseObserver = new Transform({
         transform: (chunk: Buffer, _encoding: BufferEncoding, callback: TransformCallback) => {
-          this.observe('onResponseChunk', context, new Uint8Array(chunk)).then(() => callback(null, chunk), callback);
+          observe('onResponseChunk', context, new Uint8Array(chunk)).then(() => callback(null, chunk), callback);
         },
       });
       if (!translating) {
@@ -227,11 +230,11 @@ export class ProxyService {
       }
       completed = true;
       await requestPiping;
-      await this.observe('onComplete', context);
+      await observe('onComplete', context);
     } catch (error) {
       controller.abort();
       request.resume();
-      await this.observe('onError', context, error instanceof Error ? error : new Error('Proxy failed.'));
+      await observe('onError', context, error instanceof Error ? error : new Error('Proxy failed.'));
       if (!response.headersSent && !response.destroyed) {
         if (translating) {
           const status = error instanceof AnthropicTranslationError ? error.status : 502;

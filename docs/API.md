@@ -45,6 +45,8 @@ grant access to management routes or change the server's loopback network bindin
 - `GET /api/bootstrap` -> `Bootstrap` (hfToken NEVER returned)
 - `PUT /api/workspace`, Workspace body -> validated saved Workspace
 - `PUT /api/settings`, partial LocalSettings body, optional `clearHfToken: boolean` -> PublicSettings. Blank/absent hfToken preserves token. modelBindings maps model ID to relative path inside modelsDirectory.
+- `GET /api/interceptors` -> `InterceptorPipeline`, including locked telemetry and optional environment entries.
+- `PUT /api/interceptors`, `{ entries: CustomInterceptorEntry[], trustedCodeAcknowledged: true }` -> saved `InterceptorPipeline`. Replaces only editable local modules; see [pipeline management](#pipeline-management-api) for validation and execution guarantees.
 - `GET /api/models` -> `{ models: ModelFile[] }`. Missing/unreadable directory returns an error, not an empty success.
 - `POST /api/capabilities` -> `Capabilities`; runs configured executable with --help (bounded/time-limited). No arbitrary executable in the request.
 - `POST /api/preview`, `{ modelId }` -> `{ executable: string, args: string[] }`. Resolve configuration and local model binding; no capability probe required.
@@ -216,7 +218,8 @@ requests and should not be presented as an isolated request's speed.
 `src/server/interceptors.ts` exports `Interceptor`, `RequestContext`,
 `OutboundRequest` and `ResponseContext`. A trusted TypeScript or JavaScript module
 can default-export one interceptor or an array, or export a named `interceptors`
-array. Set `MCM_INTERCEPTOR_MODULE` to its absolute path.
+array. Add its absolute local path through the sidebar **Interceptors** dialog,
+or set `MCM_INTERCEPTOR_MODULE` for a locked environment-managed entry.
 
 ```ts
 import type { Interceptor } from './src/server/interceptors';
@@ -262,8 +265,77 @@ deliberately replaces the body and updates its content length. Body-reading
 limits and preparation timeouts fail closed. Larger upload requests should use
 streaming observation rather than whole-body transformation.
 
-The built-in throughput interceptor is always registered. Custom interceptors
-are additional local code, never part of a shared workspace.
+The locked **Token and cost telemetry** entry always includes both throughput
+and persisted usage accounting. Execution order for each hook is: these two
+built-ins, environment/embedding interceptors in their supplied order, then
+editable modules in saved order (arrays are flattened without changing order).
+`onRequest` runs before `beforeRequest`; `onOutboundRequest` observes the final
+outgoing headers. Every request snapshots the chain at entry, including all
+completion/error hooks; removal and reordering only affect later requests.
+Custom code is trusted, not sandboxed, and must complete hooks promptly.
+
+### Pipeline management API
+
+These endpoints use the same localhost Host and same-origin browser guards as
+other management APIs. Proxy CORS does not grant access to management routes.
+
+`GET /api/interceptors` returns `{ entries: InterceptorEntry[] }`, in execution order:
+
+```json
+{
+  "entries": [
+    { "id": "builtin-telemetry", "name": "Token and cost telemetry", "source": "builtin", "locked": true },
+    { "id": "environment-interceptors", "name": "Environment-configured interceptors", "source": "environment", "locked": true },
+    { "id": "custom-request-tag", "name": "Request tag", "modulePath": "/absolute/path/request-tag.ts", "source": "local", "locked": false }
+  ]
+}
+```
+
+The environment entry is omitted when no environment/embedding interceptors are
+configured. Its module path and code are not exposed. Custom paths are only
+returned by this local management API, not bootstrap/workspace exports.
+
+`PUT /api/interceptors` replaces **only the editable list**, not the locked entries:
+
+```json
+{
+  "entries": [
+    { "id": "custom-request-tag", "name": "Request tag", "modulePath": "/absolute/path/request-tag.ts" }
+  ],
+  "trustedCodeAcknowledged": true
+}
+```
+
+An empty `entries` list removes all editable modules but retains both built-ins
+and the environment entry. Changing list order changes actual hook order.
+Returns the same shape as GET after persistence and activation. The explicit
+acknowledgment means the caller trusts the files to execute with MCM permissions;
+it is not a sandbox or authentication mechanism.
+
+Strict validation rejects unknown fields (including `enabled`, `locked`, or
+`source` in PUT), locked IDs, duplicate IDs/paths, relative paths, URLs, and control
+characters. Up to 32 editable modules are accepted. IDs must start with `custom-`
+followed by 1–93 ASCII letters, digits, `_`, or `-`. Names are trimmed, nonempty,
+at most 100 characters; host-native absolute file paths are at most 4096
+characters. Each module must export 1–64 objects, each with at least one recognized
+hook; supplied recognized hooks must be functions. Metadata properties are
+allowed. Windows absolute paths are supported on Windows, not reinterpreted on
+other operating systems.
+
+Updates are serialized. Every module loads and validates before atomic,
+owner-only `interceptors.json` persistence, and the active chain changes only
+after a successful write. Validation/module failures return 400; filesystem
+write failures return 500, leaving the previous active chain unchanged. Failed
+startup loading of persisted configuration is fatal, never silently replaced
+with an empty pipeline. Concurrent complete-list updates are last-successful-write
+wins; refresh/reopen before editing changes from another client.
+
+Importing modules executes trusted code even when a later module/write fails;
+import side effects cannot be rolled back. No remote code, uploads, or workspace
+code are loaded. Node's module cache is retained: restart MCM to reload edited
+files or retry a failed import after fixing its code. Removing an entry does not
+unload the module or clean up module-created resources; there is no `onClose`
+hook. Custom interceptors are additional local code, never shared workspace data.
 
 ## Embedding the backend
 

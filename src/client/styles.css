@@ -243,6 +243,15 @@ svg { flex-shrink: 0; }
 .dialog-actions { position: sticky; bottom: 0; z-index: 4; display: flex; align-items: center; flex-wrap: wrap; gap: 8px; border-top: 1px solid var(--line); padding: 17px var(--dialog-gutter); margin: 22px calc(-1 * var(--dialog-gutter)) 0; background: #fcfdf9; box-shadow: 0 -4px 12px #15291708; }
 .dialog-actions > .field-help { margin: 0; display: flex; align-items: center; gap: 5px; font-size: 9px; }
 .action-spacer { flex: 1; }
+.interceptor-list { list-style: none; padding: 0; margin: 16px 0; }
+.interceptor-entry { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 14px 0; border-bottom: 1px solid var(--line); }
+.interceptor-details { flex: 1 1 230px; min-width: 0; }
+.interceptor-details strong { font-size: 12px; overflow-wrap: anywhere; }
+.interceptor-details code { display: block; margin-top: 6px; font-size: 10px; overflow-wrap: anywhere; }
+.interceptor-controls { display: flex; gap: 5px; }
+.interceptor-entry .subtle-badge { display: inline-flex; align-items: center; gap: 5px; }
+.interceptor-add-fields { border: 0; margin: 0; padding: 0; min-width: 0; }
+.interceptor-add-fields > .button { margin-top: 14px; }
 .info-box, .warning-box { display: flex; align-items: flex-start; gap: 10px; border-radius: 7px; border: 1px solid #dfe8d3; padding: 12px; background: #f0f5e9; color: #7f936d; }
 .info-box p { font-size: 10px; line-height: 1.7; }
 .settings-form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 16px; }
