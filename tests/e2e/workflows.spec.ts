@@ -151,6 +151,10 @@ test('selecting a discovered model fills its configuration name automatically', 
   await page.goto('/');
   await openNavigation(page);
   await page.getByRole('button', { name: 'New model', exact: true }).click();
+  expect(await page.getByRole('dialog').locator('.form-field > label').allTextContents())
+    .toEqual(expect.arrayContaining(['GGUF model', 'Model name']));
+  await expect(page.getByRole('dialog').locator('.form-field > label').nth(0)).toHaveText('GGUF model');
+  await expect(page.getByRole('dialog').locator('.form-field > label').nth(1)).toHaveText('Model name');
   await page.getByRole('combobox', { name: 'GGUF model', exact: true }).selectOption('mock-model.gguf');
   await expect(page.getByRole('textbox', { name: 'Model name', exact: true })).toHaveValue('mock-model');
   await page.getByRole('button', { name: 'Create model', exact: true }).click();
@@ -690,6 +694,33 @@ test('executable overrides inherit locally and shared version mismatches warn wi
   await expect(page.locator('.executable-card .support-warning')).toContainText('b9000 (abcdef12)');
 });
 
+test('Refresh models scans the entered directory before saving and clears stale results on errors', async ({ page, request }) => {
+  await page.goto('/');
+  await openNavigation(page);
+  await page.getByRole('button', { name: 'Machine settings', exact: true }).click();
+  const dialog = page.getByRole('dialog');
+  const directory = dialog.getByRole('textbox', { name: 'Models directory', exact: true });
+  const binding = dialog.getByRole('combobox', { name: 'Local file for Tiny coder', exact: true });
+  const refresh = dialog.getByRole('button', { name: 'Refresh models', exact: true });
+  await expect(binding.locator('option[value="mock-model.gguf"]')).toHaveCount(1);
+  const alternate = path.resolve('tests/fixtures/alternate-models');
+  await directory.fill(alternate);
+  await refresh.click();
+  await expect(binding.locator('option[value="alternate-model.gguf"]')).toHaveCount(1);
+  await expect(binding.locator('option[value="mock-model.gguf"]')).toHaveCount(0);
+  expect((await bootstrap(request)).settings.modelsDirectory).toBe(path.resolve('tests/fixtures/models'));
+  await directory.fill(path.resolve('tests/fixtures/missing-model-directory'));
+  await refresh.click();
+  await expect(dialog.getByRole('alert')).toContainText('missing or unreadable');
+  await expect(binding.locator('option[value="alternate-model.gguf"]')).toHaveCount(0);
+  await directory.fill(alternate);
+  await refresh.click();
+  await binding.selectOption('alternate-model.gguf');
+  await dialog.getByRole('button', { name: 'Save settings', exact: true }).click();
+  await expect.poll(async () => (await bootstrap(request)).settings.modelsDirectory).toBe(alternate);
+  expect((await bootstrap(request)).settings.modelBindings.tiny).toBe('alternate-model.gguf');
+});
+
 test('fits the viewport without horizontal overflow', async ({ page }) => {
   await page.goto('/');
   await openNavigation(page);
@@ -698,6 +729,7 @@ test('fits the viewport without horizontal overflow', async ({ page }) => {
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
   await page.getByRole('button', { name: 'Machine settings', exact: true }).click();
   await expect(page.getByRole('dialog')).toBeVisible();
+  await expect(page.getByRole('dialog').locator('.appearance-divider')).toHaveCSS('border-top-width', '0px');
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
 });
 

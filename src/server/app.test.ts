@@ -57,6 +57,34 @@ describe('runtime shutdown', () => {
 });
 
 describe('management API validation and privacy', () => {
+  it('discovers an unsaved directory without changing the saved path', async () => {
+    const base = await app();
+    const saved = join(directory, 'saved-models');
+    const entered = join(directory, 'entered-models');
+    await mkdir(saved);
+    await mkdir(entered);
+    await writeFile(join(saved, 'saved.gguf'), 'saved');
+    await writeFile(join(entered, 'new.gguf'), 'new');
+    await runtime!.store.saveSettings({ modelsDirectory: saved });
+    const response = await fetch(`${base}/api/models`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ modelsDirectory: entered }),
+    });
+    expect(response.status).toBe(200);
+    expect((await response.json()).models.map((model: { filename: string }) => model.filename)).toEqual(['new.gguf']);
+    expect(runtime!.store.getSettings().modelsDirectory).toBe(saved);
+    expect((await (await fetch(`${base}/api/models`)).json()).models[0].filename).toBe('saved.gguf');
+    for (const modelsDirectory of ['', join(directory, 'missing'), 123]) {
+      const invalid = await fetch(`${base}/api/models`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ modelsDirectory }),
+      });
+      expect(invalid.status).toBe(400);
+    }
+    expect((await fetch(`${base}/api/models`, {
+      method: 'POST', headers: { Origin: 'https://other.example', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ modelsDirectory: entered }),
+    })).status).toBe(403);
+  });
   it('validates machine themes without exposing them in portable workspace data', async () => {
     const base = await app();
     const update = (data: unknown) => fetch(`${base}/api/settings`, {

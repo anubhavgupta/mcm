@@ -44,7 +44,7 @@ export function SettingsDialog({ settings, workspace, onClose, onSave, busy }: {
   return <Dialog title="Machine settings" subtitle="Local to this machine. Never included in a shared workspace." onClose={close} wide>
     <form className="dialog-form" onSubmit={form.handleSubmit(values => onSave(values, checkedVersion?.executablePath === values.executablePath ? checkedVersion : undefined))} noValidate>
       <section aria-labelledby="appearance-heading">
-        <div className="form-divider"><div><Palette size={17} /><h3 id="appearance-heading">Appearance</h3></div><span className="subtle-badge">Machine only</span></div>
+        <div className="form-divider appearance-divider"><div><Palette size={17} /><h3 id="appearance-heading">Appearance</h3></div><span className="subtle-badge">Machine only</span></div>
         <div className="form-field"><label htmlFor="settings-theme">Theme</label>
           <select id="settings-theme" {...form.register('theme')} disabled={busy} aria-describedby="theme-help">
             {themes.map(preset => <option key={preset.id} value={preset.id}>{preset.name}</option>)}
@@ -60,7 +60,7 @@ export function SettingsDialog({ settings, workspace, onClose, onSave, busy }: {
         <div className="form-field full-width"><label htmlFor="executable-path">llama-server executable path</label><input id="executable-path" placeholder="/path/to/llama-server" {...form.register('executablePath')} /><p className="field-help">The machine default. Base, Group and Model can override it locally. Check version runs this path before saving. Changes apply on the next launch.</p>
           <ExecutableVersionCheck path={executablePath} expected={workspace.llamaVersion} disabled={busy} onChecked={setCheckedVersion} />
         </div>
-        <div className="form-field full-width"><label htmlFor="models-directory">Models directory</label><input id="models-directory" placeholder="/path/to/models" {...form.register('modelsDirectory')} /><p className="field-help">Save this directory before refreshing discovered files.</p></div>
+        <div className="form-field full-width"><label htmlFor="models-directory">Models directory</label><input id="models-directory" placeholder="/path/to/models" {...form.register('modelsDirectory')} />        <p className="field-help">Refresh models scans the directory entered here. Save settings to keep the directory and selected bindings.</p></div>
         <div className="form-field"><label htmlFor="server-port">Server port</label><input id="server-port" type="number" {...form.register('serverPort', { valueAsNumber: true, min: { value: 1, message: 'Use a port between 1 and 65535.' }, max: { value: 65535, message: 'Use a port between 1 and 65535.' }, validate: value => Number.isInteger(value) || 'Enter a whole-number port.' })} aria-invalid={!!form.formState.errors.serverPort} />
           {form.formState.errors.serverPort && <p role="alert" className="field-error">{form.formState.errors.serverPort.message}</p>}</div>
         <div className="form-field"><label htmlFor="upstream-url">Upstream URL <span aria-hidden="true">optional</span></label><input id="upstream-url" placeholder="http://127.0.0.1:8080" {...form.register('upstreamUrl', { validate: value => {
@@ -75,7 +75,7 @@ export function SettingsDialog({ settings, workspace, onClose, onSave, busy }: {
         </select>
         <p className="field-help">Translation routes /v1/messages through the upstream /v1/chat/completions endpoint and requests per-token timings. Use a compatible llama.cpp upstream for live PP/TG and usage. This setting is local and never shared with model configurations.</p>
       </div>
-      <div className="form-divider"><div><FolderSearch size={17} /><h3>Local model bindings</h3></div><button type="button" className="text-button" onClick={() => void loadModels()} disabled={discovery.loading}><RefreshCw size={14} className={discovery.loading ? 'spin' : ''} />Refresh models</button></div>
+      <div className="form-divider"><div><FolderSearch size={17} /><h3>Local model bindings</h3></div>      <button type="button" className="text-button" onClick={() => loadModels(form.getValues('modelsDirectory'))} disabled={discovery.loading || busy}><RefreshCw size={14} className={discovery.loading ? 'spin' : ''} />Refresh models</button></div>
       <p className="field-help">Choose a discovered file for each portable model. Automatic matching uses its GGUF filename.</p>
       {discovery.error && <p className="inline-error" role="alert">{discovery.error}</p>}
       {!workspace.models.length && <p className="empty-inline">Create a model configuration to bind a local file.</p>}

@@ -261,6 +261,7 @@ svg { flex-shrink: 0; }
 .form-divider { display: flex; align-items: center; justify-content: space-between; gap: 10px; border-top: 1px solid var(--line); padding-top: 20px; margin-top: 6px; margin-bottom: 10px; color: var(--ink); }
 .form-divider > div { display: flex; align-items: center; gap: 7px; }
 .form-divider h3 { font-size: 12px; }
+.form-divider.appearance-divider { border-top: 0; padding-top: 0; margin-top: 0; }
 .form-divider + .field-help { margin-bottom: 16px; }
 .checkbox-label { display: flex; align-items: center; gap: 8px; font-size: 11px; color: var(--muted); cursor: pointer; }
 .inline-error { display: flex; align-items: center; gap: 8px; color: var(--danger); background: var(--danger-bg); border: 1px solid var(--danger-border); padding: 11px 13px; border-radius: 7px; font-size: 11px; margin: 10px 0; overflow-wrap: anywhere; white-space: pre-line; }

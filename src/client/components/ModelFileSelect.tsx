@@ -20,7 +20,7 @@ export function ModelFileSelect({ value, onChange, ...props }: Omit<ComponentPro
         : discovery.error ? <p className="field-error" role="alert">Unable to discover model files: {discovery.error}</p>
           : !filenames.length && <p className="field-help" role="status">No GGUF files found. Set your models directory in Machine settings, then refresh.</p>}
     </div>
-    <button type="button" className="text-button" disabled={props.disabled || discovery.loading} onClick={refresh}>
+    <button type="button" className="text-button" disabled={props.disabled || discovery.loading} onClick={() => refresh()}>
       <RefreshCw size={13} className={discovery.loading ? 'spin' : ''} />{discovery.error ? 'Retry model discovery' : 'Refresh model files'}
     </button>
   </div>;

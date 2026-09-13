@@ -62,6 +62,7 @@ grant access to management routes or change the server's loopback network bindin
 - `GET /api/interceptors` -> `InterceptorPipeline`, including locked telemetry and optional environment entries.
 - `PUT /api/interceptors`, `{ entries: CustomInterceptorEntry[], trustedCodeAcknowledged: true }` -> saved `InterceptorPipeline`. Replaces only editable local modules; see [pipeline management](#pipeline-management-api) for validation and execution guarantees.
 - `GET /api/models` -> `{ models: ModelFile[] }`. Missing/unreadable directory returns an error, not an empty success.
+- `POST /api/models`, `{ modelsDirectory: string }` -> the same discovery result for an unsaved directory. Does not change settings; used by Refresh models in Machine Settings.
 - `POST /api/capabilities` -> `Capabilities`; runs configured executable with --help (bounded/time-limited). No arbitrary executable in the request.
 - `POST /api/preview`, `{ modelId }` -> `{ executable: string, args: string[] }`. Resolve configuration and local model binding; no capability probe required.
 - `POST /api/launch`, `{ modelId }` -> ServerStatus

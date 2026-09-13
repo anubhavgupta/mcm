@@ -1,15 +1,19 @@
 import { useEffect, useState } from 'react';
 import type { ModelFile } from '../../shared/types';
-import { api, errorMessage } from '../api';
+import { api, errorMessage, jsonBody } from '../api';
 
 export function useModelFiles() {
   const [files, setFiles] = useState<ModelFile[]>([]);
   const [discovery, setDiscovery] = useState({ loading: true, error: '' });
-  const [revision, setRevision] = useState(0);
+  const [scan, setScan] = useState<{ revision: number; directory?: string }>({ revision: 0 });
   useEffect(() => {
     const controller = new AbortController();
     setDiscovery({ loading: true, error: '' });
-    void api<{ models: ModelFile[] }>('/models', { signal: controller.signal }).then(result => {
+    setFiles([]);
+    void api<{ models: ModelFile[] }>('/models', {
+      ...(scan.directory !== undefined ? jsonBody({ modelsDirectory: scan.directory }) : {}),
+      signal: controller.signal,
+    }).then(result => {
       if (controller.signal.aborted) return;
       setFiles(result.models);
       setDiscovery({ loading: false, error: '' });
@@ -17,6 +21,6 @@ export function useModelFiles() {
       if (!controller.signal.aborted) setDiscovery({ loading: false, error: errorMessage(error) });
     });
     return () => controller.abort();
-  }, [revision]);
-  return { files, discovery, refresh: () => setRevision(value => value + 1) };
+  }, [scan]);
+  return { files, discovery, refresh: (directory?: string) => setScan(current => ({ revision: current.revision + 1, directory })) };
 }

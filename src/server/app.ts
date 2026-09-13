@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { repoSchema, resolvePricing } from '../shared/config';
 import { expectedLlamaVersion } from '../shared/executable';
 import { ApiError } from './errors';
-import { executablePathSchema, Store } from './storage';
+import { executablePathSchema, settingsSchema, Store } from './storage';
 import { Events } from './events';
 import { ProcessManager, discoverCapabilities, discoverVersion, scopedSettings, type ProcessOptions } from './process';
 import { discoverModels } from './models';
@@ -139,6 +139,10 @@ export async function createApp(options: AppOptions) {
   app.put('/api/settings', async (request, response) => { response.json(await store.saveSettings(request.body)); });
   app.get('/api/models', async (_request, response) => {
     response.json({ models: await discoverModels(store.getSettings().modelsDirectory) });
+  });
+  app.post('/api/models', async (request, response) => {
+    const { modelsDirectory } = settingsSchema.pick({ modelsDirectory: true }).parse(request.body);
+    response.json({ models: await discoverModels(modelsDirectory) });
   });
   app.post('/api/capabilities', async (request, response) => {
     const { scope = { kind: 'base' } } = capabilitiesRequest.parse(request.body ?? {});
