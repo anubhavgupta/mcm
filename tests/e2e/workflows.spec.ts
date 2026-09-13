@@ -612,6 +612,21 @@ test('dialog headers and footers remain fixed while their bodies scroll', async 
   }
 });
 
+test('Machine Settings accepts modern llama.cpp semantic build output', async ({ page, request }) => {
+  await page.goto('/');
+  await openNavigation(page);
+  await page.getByRole('button', { name: 'Machine settings', exact: true }).click();
+  const dialog = page.getByRole('dialog');
+  await dialog.getByRole('textbox', { name: 'llama-server executable path', exact: true })
+    .fill(path.resolve('tests/fixtures/llama-server-modern.mjs'));
+  await dialog.getByRole('button', { name: 'Check version', exact: true }).click();
+  await expect(dialog.getByText('0.3.0-dev (build 10712, commit daef7b687)', { exact: true })).toBeVisible();
+  await expect(dialog.getByRole('alert')).toHaveCount(0);
+  await dialog.getByRole('button', { name: 'Save settings', exact: true }).click();
+  await expect.poll(async () => (await bootstrap(request)).workspace.llamaVersion)
+    .toBe('0.3.0-dev (build 10712, commit daef7b687)');
+});
+
 test('Machine Settings checks the unsaved executable version before saving', async ({ page, request }) => {
   await page.goto('/');
   await openNavigation(page);

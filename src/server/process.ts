@@ -81,13 +81,16 @@ async function probeExecutable(settings: LocalSettings, argument: '--help' | '--
 export async function discoverVersion(settings: LocalSettings, timeoutMs = 5000): Promise<ExecutableVersion> {
   const output = await probeExecutable(settings, '--version', timeoutMs);
   for (const line of output.split(/\r?\n/)) {
-    // Only publish the build identifier and optional commit, never arbitrary build diagnostics.
-    const match = /^[ \t]*(?:llama\.cpp[ \t]+)?version:[ \t]*(b?\d+(?:\.\d+){0,3})(?=$|[ \t(])(?:[ \t]*\(([a-f0-9]{6,40})\))?/i.exec(line);
+    // Retain recognized version/build fields, not compiler details or local build paths.
+    const match = /^[ \t]*(?:llama\.cpp[ \t]+)?version:[ \t]*(b?\d+(?:\.\d+){0,3}(?:-[0-9a-z][0-9a-z.-]*)?(?:\+[0-9a-z][0-9a-z.-]*)?)(?=$|[ \t(])/i.exec(line);
     if (!match) continue;
-    const version = `${match[1]}${match[2] ? ` (${match[2]})` : ''}`;
+    const suffix = line.slice(match[0].length);
+    const modern = /^[ \t]*\(build[ \t]+(\d+),[ \t]*commit[ \t]+([a-f0-9]{6,64}|unknown)\)/i.exec(suffix);
+    const legacy = /^[ \t]*\(([a-f0-9]{6,64})\)/i.exec(suffix);
+    const version = match[1] + (modern ? ` (build ${modern[1]}, commit ${modern[2]})` : legacy ? ` (${legacy[1]})` : '');
     if (version.length <= 256) return { executablePath: settings.executablePath, version };
   }
-  throw new ApiError(400, 'Executable --version did not report a recognized llama.cpp version. Select a llama-server binary that reports "version: BUILD (COMMIT)".');
+  throw new ApiError(400, 'Executable --version did not report a recognized llama.cpp version. Expected "version: BUILD (COMMIT)" or "version: VERSION (build NUMBER, commit HASH)".');
 }
 
 export async function discoverCapabilities(settings: LocalSettings, timeoutMs = 5000, expectedVersion?: string, versionTimeoutMs = timeoutMs): Promise<Capabilities> {

@@ -9,6 +9,10 @@ argument generation and share encoding live in `src/shared`.
 - `POST /api/version`, `{ "executablePath": "/absolute/path/to/llama-server" }`
   runs a bounded `--version` probe and returns `{ executablePath, version }`.
   The supplied path may be an unsaved form value; this operation does not save it.
+  Version detection supports legacy `version: BUILD (COMMIT)` output and modern
+  semantic versions such as `version: 0.3.0-dev (build 10712, commit daef7b687)`.
+  Build/commit identifiers are retained; compiler diagnostics and build paths
+  are excluded from the returned and shared metadata.
 - `POST /api/capabilities` accepts optional `{ scope: { kind: "base" } }`,
   `{ scope: { kind: "group", id } }`, or `{ scope: { kind: "model", id } }`.
   It resolves that scope's machine-local executable and returns supported flags,

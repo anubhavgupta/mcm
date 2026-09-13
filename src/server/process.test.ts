@@ -88,6 +88,24 @@ describe('private bounded version discovery', () => {
     await store.saveSettings({ hfToken: 'abcdef' });
     expect((await discoverVersion(store.getSettings())).version).toBe('b1234');
   });
+  it.each(['stdout', 'stderr'])('recognizes modern semantic build output from %s', async stream => {
+    const output = 'version: 0.3.0-dev (build 10712, commit daef7b687)\r\nbuilt with MSVC 19.44.35223.0 for x64\r\n';
+    const path = await fixture(`process.${stream}.write(${JSON.stringify(output)});`);
+    await store.saveSettings({ executablePath: path });
+    expect(await discoverVersion(store.getSettings())).toEqual({
+      executablePath: path, version: '0.3.0-dev (build 10712, commit daef7b687)',
+    });
+  });
+  it.each([
+    ['version: 0.3.0 (build 10712, commit daef7b687)', '0.3.0 (build 10712, commit daef7b687)'],
+    ['llama.cpp version: 0.3.0-rc.1+cuda (build 10713, commit abcdef12) built at C:\\private', '0.3.0-rc.1+cuda (build 10713, commit abcdef12)'],
+    ['version: 0.3.0-dev (build 0, commit unknown)', '0.3.0-dev (build 0, commit unknown)'],
+    ['version: 0.3.0-dev', '0.3.0-dev'],
+    ['version: 10712 (daef7b687)', '10712 (daef7b687)'],
+  ])('extracts only recognized version metadata from %s', async (output, expected) => {
+    await store.saveSettings({ executablePath: await fixture(`console.log(${JSON.stringify(output)});`) });
+    expect((await discoverVersion(store.getSettings())).version).toBe(expected);
+  });
   it('rejects unrecognized output without echoing private diagnostics', async () => {
     for (const output of ['built with clang 19 at /private/user hf_secret', 'version: /private/1234', 'version: hf_secret']) {
       await store.saveSettings({ executablePath: await fixture(`console.log(${JSON.stringify(output)});`) });
