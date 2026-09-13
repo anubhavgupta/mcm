@@ -6,7 +6,7 @@ const fieldSchema = z.object({
   key: z.string().regex(/^[a-zA-Z][a-zA-Z0-9]*$/),
   label: z.string(),
   section: z.string(),
-  control: z.enum(['number', 'select', 'toggle', 'text', 'json']),
+  control: z.enum(['number', 'select', 'toggle', 'text', 'json', 'multi-select', 'model-file']),
   flag: z.string().regex(/^--?[a-zA-Z0-9-]+$/).optional(),
   aliases: z.array(z.string()).optional(),
   default: z.union([z.string(), z.number(), z.boolean()]),
@@ -16,7 +16,13 @@ const fieldSchema = z.object({
   integer: z.boolean().optional(),
   options: z.array(z.string()).optional(),
   omitValues: z.array(z.union([z.string(), z.number(), z.boolean()])).optional(),
-  dependsOn: z.object({ key: z.string(), equals: z.union([z.string(), z.number(), z.boolean()]) }).optional(),
+  dependsOn: z.object({
+    key: z.string(),
+    equals: z.union([z.string(), z.number(), z.boolean()]).optional(),
+    containsAny: z.array(z.string()).min(1).optional(),
+  }).refine(rule => (rule.equals !== undefined) !== (rule.containsAny !== undefined), 'Choose one dependency condition.').optional(),
+  required: z.boolean().optional(),
+  hideWhenDisabled: z.boolean().optional(),
   description: z.string().optional(),
 }).strict();
 
@@ -40,6 +46,15 @@ export function fieldError(field: SettingField, value: unknown): string | undefi
     if (typeof value !== 'string') return 'Enter text.';
     if (value.length > 8192 || value.includes('\0')) return 'Text is too long or contains a null character.';
     if (field.control === 'select' && !field.options?.includes(value)) return 'Choose a supported option.';
+    if (field.control === 'multi-select') {
+      const selected = value === 'none' ? [] : value.split(',');
+      if (selected.some(item => !field.options?.includes(item)) || new Set(selected).size !== selected.length) {
+        return 'Choose unique supported methods, or none.';
+      }
+    }
+    if (field.control === 'model-file' && value !== '' && !/^[^/\\:\x00-\x1f]{1,250}\.gguf$/i.test(value)) {
+      return 'Choose a portable GGUF filename, not a machine-specific path.';
+    }
     if (field.control === 'json' && value !== '') {
       try {
         const parsed: unknown = JSON.parse(value);
@@ -97,7 +112,7 @@ export const workspaceSchema = z.object({
       ctx.addIssue({ code: 'custom', path: ['models'], message: `Missing group for ${model.name}.` });
     }
   }
-}).transform(({ basePricing, ...workspace }) => ({
+}).transform(({ basePricing, ...workspace }): Workspace => ({
   ...workspace,
   base: { ...basePricing, ...workspace.base },
   models: workspace.models.map(({ pricing, ...model }) => ({
@@ -123,7 +138,12 @@ export function resolvePricing(workspace: Workspace, model?: ModelConfig): Model
 }
 
 export function isFieldEnabled(field: SettingField, values: Values): boolean {
-  return !field.dependsOn || values[field.dependsOn.key] === field.dependsOn.equals;
+  if (!field.dependsOn) return true;
+  const value = values[field.dependsOn.key];
+  const choices = field.dependsOn.containsAny;
+  return choices
+    ? typeof value === 'string' && value.split(',').some(item => choices.includes(item))
+    : value === field.dependsOn.equals;
 }
 
 export function fieldSupported(field: SettingField, flags: string[]): boolean {
@@ -134,11 +154,18 @@ export function parseHelp(help: string): string[] {
   return [...new Set(help.match(/(?<![\w-])--?[a-zA-Z][a-zA-Z0-9-]*/g) ?? [])].sort();
 }
 
-export function buildArgs(values: Values, supportedFlags?: string[]): string[] {
+export function buildArgs(values: Values, supportedFlags?: string[], resolvedFiles: Record<string, string> = {}): string[] {
   valuesSchema.parse(values);
+  if (typeof values.speculation === 'string' && values.speculation.split(',').includes('ngram-mod') &&
+    typeof values.ngramMin === 'number' && typeof values.ngramMax === 'number' && values.ngramMin > values.ngramMax) {
+    throw new Error('Minimum n-gram tokens cannot exceed maximum n-gram tokens.');
+  }
   const args: string[] = [];
   for (const field of catalog.fields) {
     const value = values[field.key];
+    if (field.required && isFieldEnabled(field, values) && (value === undefined || value === '')) {
+      throw new Error(`${field.label} is required for the selected speculation methods.`);
+    }
     if (!field.flag || value === undefined || !isFieldEnabled(field, values) || value === false || value === '' || field.omitValues?.includes(value)) continue;
     if (supportedFlags && !fieldSupported(field, supportedFlags)) {
       throw new Error(`${field.label} (${field.flag}) is not supported by this executable.`);
@@ -147,7 +174,12 @@ export function buildArgs(values: Values, supportedFlags?: string[]): string[] {
       ? [field.flag, ...(field.aliases ?? [])].find(item => supportedFlags.includes(item))!
       : field.flag;
     args.push(flag);
-    if (value !== true) args.push(String(value));
+    if (value !== true) {
+      if (field.control === 'model-file') {
+        if (!resolvedFiles[field.key]) throw new Error(`Resolve ${field.label} to a local GGUF file before launch.`);
+        args.push(resolvedFiles[field.key]);
+      } else args.push(String(value));
+    }
   }
   return args;
 }

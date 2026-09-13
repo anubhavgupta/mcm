@@ -66,6 +66,39 @@ The editor displays effective values and their source. Settings are grouped
 into Compute, Sampling, Memory & context, and Advanced. Dependency rules are
 evaluated against the effective configuration, including inherited values.
 
+### Speculative decoding
+
+The **Speculative decoding** section supports multiple methods through the
+**Speculation** checklist. Clear every selection to disable speculation. Selected
+methods are passed as a comma-separated `--spec-type` argument and inherit as
+one setting; individual draft and n-gram controls inherit normally.
+
+**Standard llama.cpp currently uses its own hardcoded execution priority, not the
+order of `--spec-type`.** MCM therefore does not expose ordering controls.
+The upstream order is ngram-simple,
+ngram-map-k, ngram-map-k4v, ngram-mod, ngram-cache, then draft-simple, draft-eagle3,
+draft-mtp, draft-dflash, draft-dspark (only enabled/available methods run).
+See [llama.cpp's implementation](https://github.com/ggml-org/llama.cpp/blob/master/common/speculative.cpp).
+Controlling actual execution priority requires an upstream implementation change.
+
+Selecting draft-simple, draft-eagle3, draft-dflash, or draft-dspark reveals
+**Draft model**, draft GPU layers, CPU threads, KV cache types and maximum draft
+tokens. Choose a compatible GGUF from the configured models directory. For
+draft-mtp, the model's own MTP head is used, so no external file is required.
+Draft methods share one draft-file configuration; selecting multiple methods
+does not make incompatible models or combinations compatible.
+
+Selecting ngram-mod reveals its match/minimum/maximum token controls. Inactive
+controls are hidden and omitted from launch arguments without deleting saved
+overrides. Missing required draft files and unsupported explicit flags fail with
+an explanation. Capability probing checks flags; supported method names and
+model architectures still depend on your llama.cpp build.
+
+Draft file identities remain portable filenames. For duplicate filenames or
+different local layouts, use **Machine settings → Draft file for [model]**.
+These per-target-model bindings stay local and are never shared. Existing
+single-method settings such as `draft-mtp` and `none` continue to load unchanged.
+
 ### Token pricing
 
 The **Token pricing** section appears in Base, Group and Model configurations,
@@ -339,10 +372,18 @@ optional CLI flag/aliases, optional dependency, and values to omit.
 }
 ```
 
-Available controls are `number`, `select`, `toggle`, `text`, and `json`.
+Available controls are `number`, `select`, `toggle`, `text`, `json`,
+`multi-select`, and `model-file`.
 `options` defines select choices. A field with no `flag` can act as a UI-only
 dependency switch. Both editor rendering and argument generation use this
 catalog; no duplicate launch serializer is needed.
+
+A `multi-select` stores comma-separated method names, or `none`
+for an empty selection. Its `options` exclude the `none` sentinel. `model-file` stores
+a GGUF filename and requires server-side local resolution before argv generation.
+Use `dependsOn: { "key": "speculation", "containsAny": ["draft-simple", "draft-dflash"] }`
+for list membership dependencies, and `hideWhenDisabled: true` to hide inactive
+controls. `required: true` enforces a value before launch when its dependency is active.
 
 Changing an existing key or removing a field may invalidate stored workspaces.
 Keep schema compatibility or implement an explicit version migration rather

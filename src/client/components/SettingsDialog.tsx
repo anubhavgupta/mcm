@@ -1,11 +1,10 @@
-import { useEffect, useState } from 'react';
 import { useForm, useWatch } from 'react-hook-form';
 import { FolderSearch, LockKeyhole, RefreshCw, Save } from 'lucide-react';
-import { repoSchema } from '../../shared/config';
-import type { LocalSettings, ModelFile, PublicSettings, Workspace } from '../../shared/types';
-import { api, errorMessage } from '../api';
+import { repoSchema, resolveConfig } from '../../shared/config';
+import type { LocalSettings, PublicSettings, Workspace } from '../../shared/types';
 import { Dialog } from './Dialog';
 import { useUnsavedWarning } from '../hooks/useUnsavedWarning';
+import { useModelFiles } from '../hooks/useModelFiles';
 
 interface SettingsValues extends LocalSettings { clearHfToken: boolean }
 
@@ -19,21 +18,14 @@ export function SettingsDialog({ settings, workspace, onClose, onSave, busy }: {
       serverPort: settings.serverPort, upstreamUrl: settings.upstreamUrl,
       anthropicMode: settings.anthropicMode ?? 'passthrough',
       modelBindings: { ...Object.fromEntries(workspace.models.map(model => [model.id, ''])), ...settings.modelBindings }, hfRepo: settings.hfRepo, hfToken: '', clearHfToken: false,
+      draftModelBindings: { ...Object.fromEntries(workspace.models.map(model => [model.id, ''])), ...(settings.draftModelBindings ?? {}) },
     },
   });
   useUnsavedWarning(form.formState.isDirty);
   const clearToken = useWatch({ control: form.control, name: 'clearHfToken' });
-  const [files, setFiles] = useState<ModelFile[]>([]);
-  const [discovery, setDiscovery] = useState<{ loading: boolean; error: string }>({ loading: true, error: '' });
-  const loadModels = async () => {
-    setDiscovery({ loading: true, error: '' });
-    try {
-      const result = await api<{ models: ModelFile[] }>('/models');
-      setFiles(result.models);
-      setDiscovery({ loading: false, error: '' });
-    } catch (error) { setDiscovery({ loading: false, error: errorMessage(error) }); }
-  };
-  useEffect(() => { void loadModels(); }, []);
+  const { files, discovery, refresh: loadModels } = useModelFiles();
+  const bindings = useWatch({ control: form.control, name: 'modelBindings' });
+  const draftBindings = useWatch({ control: form.control, name: 'draftModelBindings' });
   const close = () => {
     if (!busy && (!form.formState.isDirty || window.confirm('Discard unsaved machine settings?'))) onClose();
   };
@@ -61,13 +53,26 @@ export function SettingsDialog({ settings, workspace, onClose, onSave, busy }: {
       {discovery.error && <p className="inline-error" role="alert">{discovery.error}</p>}
       {!workspace.models.length && <p className="empty-inline">Create a model configuration to bind a local file.</p>}
       {workspace.models.map(model => {
-        const currentBinding = settings.modelBindings[model.id];
+        const currentBinding = bindings?.[model.id];
         return <div className="form-field" key={model.id}><label htmlFor={`binding-${model.id}`}>Local file for {model.name}</label>
-          <select id={`binding-${model.id}`} {...form.register(`modelBindings.${model.id}`)}>
+          <select id={`binding-${model.id}`} value={currentBinding ?? ''} {...form.register(`modelBindings.${model.id}`)}>
             <option value="">Automatic — {model.model.filename}</option>
             {currentBinding && !files.some(file => file.relativePath === currentBinding) && <option value={currentBinding}>{currentBinding} (not in discovery)</option>}
             {files.map(file => <option key={file.relativePath} value={file.relativePath}>{file.relativePath} · {(file.size / 1024 ** 3).toFixed(2)} GB</option>)}
           </select>
+        </div>;
+      })}
+      {workspace.models.map(model => {
+        const draftModel = resolveConfig(workspace, model).draftModel;
+        if (typeof draftModel !== 'string' || !draftModel) return null;
+        const currentBinding = draftBindings?.[model.id];
+        return <div className="form-field" key={`draft-${model.id}`}><label htmlFor={`draft-binding-${model.id}`}>Draft file for {model.name}</label>
+          <select id={`draft-binding-${model.id}`} value={currentBinding ?? ''} {...form.register(`draftModelBindings.${model.id}`)} disabled={busy} aria-describedby={`draft-binding-${model.id}-help`}>
+            <option value="">Automatic — {draftModel}</option>
+            {currentBinding && !files.some(file => file.relativePath === currentBinding) && <option value={currentBinding}>{currentBinding} (not in discovery)</option>}
+            {files.map(file => <option key={file.relativePath} value={file.relativePath}>{file.relativePath} · {(file.size / 1024 ** 3).toFixed(2)} GB</option>)}
+          </select>
+          <p className="field-help" id={`draft-binding-${model.id}-help`}>Optional machine-local draft binding. Automatic matching uses the inherited or overridden draft filename; choose a file here to resolve ambiguous matches.</p>
         </div>;
       })}
       <div className="form-divider"><div><LockKeyhole size={17} /><h3>Hugging Face credentials</h3></div><span className="subtle-badge">Machine only</span></div>

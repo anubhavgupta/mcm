@@ -66,6 +66,42 @@ describe('bounded executable capability discovery', () => {
 });
 
 describe('serialized child lifecycle and health readiness', () => {
+  it('previews ordered speculation and resolves a draft GGUF separately from the target', async () => {
+    const path = await fixture(`throw new Error('preview must not spawn');`);
+    await store.saveSettings({ executablePath: path });
+    await writeFile(join(directory, 'models/draft model.gguf'), 'draft');
+    const workspace = store.getWorkspace();
+    workspace.base = { speculation: 'ngram-mod,draft-simple', draftModel: 'draft model.gguf', draftGpuLayers: 0 };
+    await store.saveWorkspace(workspace);
+    manager = new ProcessManager(store, new Events());
+    const preview = await manager.preview('model');
+    expect(preview.args.slice(preview.args.indexOf('--spec-type'), preview.args.indexOf('--spec-type') + 2))
+      .toEqual(['--spec-type', 'ngram-mod,draft-simple']);
+    expect(preview.args[preview.args.indexOf('--spec-draft-model') + 1]).toBe(join(directory, 'models/draft model.gguf'));
+    expect(preview.args[preview.args.indexOf('--model') + 1]).toBe(join(directory, 'models/model.gguf'));
+    expect(preview.args[preview.args.indexOf('--spec-draft-ngl') + 1]).toBe('0');
+  });
+  it('requires explicit local bindings for ambiguous draft files and ignores them when disabled', async () => {
+    await store.saveSettings({ executablePath: await fixture('') });
+    for (const folder of ['a', 'b']) {
+      await mkdir(join(directory, 'models', folder));
+      await writeFile(join(directory, 'models', folder, 'draft.gguf'), 'draft');
+    }
+    await store.saveWorkspace({ ...store.getWorkspace(), base: { speculation: 'draft-simple', draftModel: 'draft.gguf' } });
+    manager = new ProcessManager(store, new Events());
+    await expect(manager.preview('model')).rejects.toThrow('Multiple files match');
+    await store.saveSettings({ draftModelBindings: { model: 'b/draft.gguf' } });
+    const preview = await manager.preview('model');
+    expect(preview.args[preview.args.indexOf('--spec-draft-model') + 1]).toBe(join(directory, 'models/b/draft.gguf'));
+    await store.saveWorkspace({ ...store.getWorkspace(), base: { speculation: 'none', draftModel: 'missing.gguf' } });
+    expect((await manager.preview('model')).args).not.toContain('--spec-draft-model');
+  });
+  it('cannot substitute the target binding for an absent draft file', async () => {
+    await store.saveSettings({ executablePath: await fixture(''), modelBindings: { model: 'model.gguf' } });
+    await store.saveWorkspace({ ...store.getWorkspace(), base: { speculation: 'draft-dflash', draftModel: 'absent.gguf' } });
+    manager = new ProcessManager(store, new Events());
+    await expect(manager.preview('model')).rejects.toThrow('absent.gguf was not found');
+  });
   async function serverFixture(ignoreTerm = false, healthDelay = 250): Promise<string> {
     return fixture(`
       import { createServer } from 'node:http';

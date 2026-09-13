@@ -4,6 +4,8 @@ import { ArrowDown, Check, CircleHelp, Cpu, DollarSign, FlaskConical, Gauge, Har
 import { catalog, defaults, fieldError, fieldSupported, isFieldEnabled } from '../../shared/config';
 import type { Capabilities, SettingValue, Values, Workspace } from '../../shared/types';
 import type { Selection } from './Sidebar';
+import { MethodSelect } from './MethodSelect';
+import { ModelFileSelect } from './ModelFileSelect';
 
 interface EditorValues { values: Values; overrides: Record<string, boolean> }
 
@@ -32,6 +34,11 @@ export function ConfigEditor({ workspace, selection, capabilities, onDirty, onSa
   const overrideCount = Object.values(watched.overrides ?? {}).filter(Boolean).length;
   const { isDirty } = form.formState;
   useEffect(() => { onDirty(isDirty); }, [isDirty, onDirty]);
+  useEffect(() => {
+    for (const field of catalog.fields) {
+      if (!isFieldEnabled(field, effective)) form.clearErrors(`values.${field.key}`);
+    }
+  }, [watched.values, watched.overrides, form]);
 
   const origin = (key: string) => {
     if (watched.overrides?.[key]) return selection.kind === 'base' ? 'Base' : selection.kind === 'group' ? 'Group' : 'Model';
@@ -43,6 +50,11 @@ export function ConfigEditor({ workspace, selection, capabilities, onDirty, onSa
   const submit = form.handleSubmit(async data => {
     const values: Values = {};
     for (const field of catalog.fields) {
+      if (selection.kind === 'model' && field.required && isFieldEnabled(field, effective) && effective[field.key] === '') {
+        form.setError(`values.${field.key}`, { message: `${field.label} is required. Override this setting and choose a GGUF file, or inherit one from Base or Group.` });
+        document.getElementById(`setting-${field.key}`)?.scrollIntoView({ block: 'center' });
+        return;
+      }
       if (!data.overrides[field.key]) continue;
       const value = data.values[field.key];
       const error = fieldError(field, value);
@@ -69,25 +81,31 @@ export function ConfigEditor({ workspace, selection, capabilities, onDirty, onSa
           {catalog.fields.filter(field => field.section === section.id).map(field => {
             const overridden = watched.overrides?.[field.key] ?? false;
             const enabled = isFieldEnabled(field, effective);
+            if (field.hideWhenDisabled && !enabled) return null;
             const supported = !capabilities || fieldSupported(field, capabilities.flags);
             const selectedFlag = capabilities ? [field.flag, ...(field.aliases ?? [])].find(flag => flag !== undefined && capabilities.flags.includes(flag)) : field.flag;
             const fieldId = `setting-${field.key}`;
-            return <div className={`field-card ${overridden ? 'is-overridden' : ''} ${!enabled ? 'dependency-disabled' : ''}`} key={field.key}>
-              <div className="field-top"><label htmlFor={fieldId}>{field.label}</label><span className={`origin-badge origin-${origin(field.key).toLowerCase()}`}>{origin(field.key)}</span></div>
+            return <div className={`field-card ${field.control === 'multi-select' ? 'full-width' : ''} ${overridden ? 'is-overridden' : ''} ${!enabled ? 'dependency-disabled' : ''}`} key={field.key}>
+              <div className="field-top"><label id={`${fieldId}-label`} htmlFor={field.control === 'multi-select' ? undefined : fieldId}>{field.label}</label><span className={`origin-badge origin-${origin(field.key).toLowerCase()}`}>{origin(field.key)}</span></div>
               <Controller control={form.control} name={`values.${field.key}`}
-                rules={{ validate: value => !form.getValues(`overrides.${field.key}`) || fieldError(field, value) || true }}
+                rules={{ validate: value => !enabled || !form.getValues(`overrides.${field.key}`) || fieldError(field, value) || true }}
                 render={({ field: input, fieldState }) => {
-                  const common = { id: fieldId, name: input.name, ref: input.ref, onBlur: input.onBlur, disabled: !enabled || !overridden || busy, 'aria-invalid': !!fieldState.error, 'aria-describedby': `${fieldId}-help${fieldState.error ? ` ${fieldId}-error` : ''}` };
+                  const common = { id: fieldId, name: input.name, ref: input.ref, onBlur: input.onBlur, disabled: !enabled || !overridden || busy, 'aria-invalid': !!fieldState.error, 'aria-required': enabled && field.required, 'aria-describedby': `${fieldId}-help${field.key === 'speculation' ? ` ${fieldId}-priority` : ''}${fieldState.error ? ` ${fieldId}-error` : ''}` };
                   const update = (value: SettingValue) => input.onChange(value);
                   return <>
-                    {field.control === 'toggle' ? <div className="toggle-line"><label className="switch"><input {...common} type="checkbox" checked={input.value === true} onChange={event => update(event.target.checked)} /><span className="switch-track" /></label><span className="toggle-value">{input.value === true ? 'Enabled' : 'Disabled'}</span></div>
+                    {field.control === 'multi-select' ? <MethodSelect id={fieldId} name={input.name} inputRef={input.ref} value={String(input.value ?? 'none')} options={field.options ?? []} disabled={common.disabled} onChange={update} onBlur={input.onBlur} describedBy={common['aria-describedby']} invalid={common['aria-invalid']} />
+                      : field.control === 'model-file' ? <ModelFileSelect {...common} value={String(input.value ?? '')} onChange={update} />
+                      : field.control === 'toggle' ? <div className="toggle-line"><label className="switch"><input {...common} type="checkbox" checked={input.value === true} onChange={event => update(event.target.checked)} /><span className="switch-track" /></label><span className="toggle-value">{input.value === true ? 'Enabled' : 'Disabled'}</span></div>
                       : field.control === 'select' ? <select {...common} value={String(input.value ?? '')} onChange={event => update(event.target.value)}>{field.options?.map(option => <option key={option} value={option}>{option}</option>)}</select>
                         : field.control === 'json' ? <textarea {...common} value={String(input.value ?? '')} onChange={event => update(event.target.value)} placeholder='{"enable_thinking": false}' rows={2} spellCheck={false} />
                           : <input {...common} type={field.control === 'number' ? 'number' : 'text'} value={typeof input.value === 'boolean' ? String(input.value) : input.value ?? ''} min={field.min} max={field.max} step={field.integer ? 1 : field.step ?? 'any'} onChange={event => update(field.control === 'number' && event.target.value !== '' ? event.target.valueAsNumber : event.target.value)} />}
                     {fieldState.error && <p className="field-error" id={`${fieldId}-error`} role="alert">{fieldState.error.message}</p>}
                   </>;
                 }} />
-              <p className="field-help" id={`${fieldId}-help`}>{!enabled ? `Available when ${catalog.fields.find(item => item.key === field.dependsOn?.key)?.label ?? field.dependsOn?.key} is ${String(field.dependsOn?.equals)}.` : field.description ?? (selectedFlag ? selectedFlag : 'Configuration preference')}</p>
+              <p className="field-help" id={`${fieldId}-help`}>{!enabled ? `Available when ${catalog.fields.find(item => item.key === field.dependsOn?.key)?.label ?? field.dependsOn?.key} ${field.dependsOn?.containsAny ? `includes ${field.dependsOn.containsAny.join(' or ')}` : `is ${String(field.dependsOn?.equals)}`}.` : field.description ?? (selectedFlag ? selectedFlag : 'Configuration preference')}
+                {enabled && field.required && effective[field.key] === '' && ` Required before launch: override ${field.label} and choose a GGUF file, or inherit one from Base or Group.${selection.kind !== 'model' ? ' Base and Group configurations can be saved without a file for models to supply later.' : ''}`}
+              </p>
+              {field.key === 'speculation' && <p className="execution-priority-warning" id={`${fieldId}-priority`}>              Standard llama.cpp determines the execution priority of the selected methods.</p>}
               {!supported && <p className="support-warning"><CircleHelp size={13} />Not supported by the probed executable</p>}
               {capabilities && selectedFlag && selectedFlag !== field.flag && <p className="alias-note">Compatible alias: <code>{selectedFlag}</code></p>}
               <div className="field-bottom"><code>{field.flag ?? 'preference'}</code>

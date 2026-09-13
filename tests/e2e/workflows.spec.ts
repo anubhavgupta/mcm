@@ -478,6 +478,87 @@ test('both usage rows update while an inference stream is still running', async 
     .toHaveText((before.session.outputTokens + 2).toLocaleString());
 });
 
+test('combines speculation methods and launches with draft settings without order controls', async ({ page, request }) => {
+  await page.goto('/');
+  await selectModel(page);
+  await page.getByRole('button', { name: 'Override Speculation', exact: true }).click();
+  await page.getByRole('checkbox', { name: 'ngram-mod', exact: true }).check();
+  await expect(page.getByRole('combobox', { name: 'Draft model', exact: true })).toHaveCount(0);
+  await page.getByRole('checkbox', { name: 'draft-simple', exact: true }).check();
+  await expect(page.getByRole('button', { name: /Move .* (up|down)/ })).toHaveCount(0);
+  await expect(page.getByText('Requested CLI order', { exact: true })).toHaveCount(0);
+  const draft = page.getByRole('combobox', { name: 'Draft model', exact: true });
+  await expect(draft).toBeVisible();
+  await expect(draft).toBeDisabled();
+  await page.getByRole('button', { name: 'Override Draft model', exact: true }).click();
+  await draft.selectOption('mock-draft.gguf');
+  await page.getByRole('button', { name: 'Override Draft GPU layers', exact: true }).click();
+  await page.getByRole('spinbutton', { name: 'Draft GPU layers', exact: true }).fill('0');
+  await page.getByRole('button', { name: 'Save changes', exact: true }).click();
+  await expect.poll(async () => (await bootstrap(request)).workspace.models[0].values).toMatchObject({
+    speculation: 'ngram-mod,draft-simple', draftModel: 'mock-draft.gguf', draftGpuLayers: 0,
+  });
+  await page.reload();
+  await selectModel(page);
+  await expect(draft).toHaveValue('mock-draft.gguf');
+  await expect(page.getByRole('checkbox', { name: 'draft-simple', exact: true })).toBeChecked();
+  const preview = await request.post('/api/preview', { data: { modelId: 'tiny' } });
+  expect(preview.ok()).toBe(true);
+  const { args } = await preview.json() as { args: string[] };
+  expect(args[args.indexOf('--spec-type') + 1]).toBe('ngram-mod,draft-simple');
+  expect(args[args.indexOf('--spec-draft-model') + 1]).toBe(path.resolve('tests/fixtures/models/mock-draft.gguf'));
+  expect(args[args.indexOf('--spec-draft-ngl') + 1]).toBe('0');
+  await page.getByRole('button', { name: 'Launch model', exact: true }).click();
+  await expect.poll(async () => (await bootstrap(request)).status.phase).toBe('ready');
+});
+
+test('speculation inherits selected methods and MTP does not require an external draft file', async ({ page, request }) => {
+  await jsonPut(request, '/api/workspace', {
+    ...fixture,
+    groups: [{ ...fixture.groups[0], values: { speculation: 'ngram-mod,draft-mtp', draftMax: 8 } }],
+  });
+  await page.goto('/');
+  await selectModel(page);
+  await expect(page.getByRole('checkbox', { name: 'draft-mtp', exact: true })).toBeChecked();
+  await expect(page.getByRole('checkbox', { name: 'draft-mtp', exact: true })).toBeDisabled();
+  await expect(page.getByRole('combobox', { name: 'Draft model', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('spinbutton', { name: 'Maximum draft tokens', exact: true })).toHaveValue('8');
+  await page.getByRole('button', { name: 'Override Speculation', exact: true }).click();
+  await page.getByRole('checkbox', { name: 'draft-mtp', exact: true }).uncheck();
+  await page.getByRole('checkbox', { name: 'ngram-mod', exact: true }).uncheck();
+  await expect(page.getByRole('spinbutton', { name: 'Maximum draft tokens', exact: true })).toHaveCount(0);
+  await page.getByRole('button', { name: 'Save changes', exact: true }).click();
+  await expect.poll(async () => (await bootstrap(request)).workspace.models[0].values.speculation).toBe('none');
+  await page.getByRole('button', { name: 'Reset Speculation to inherited', exact: true }).click();
+  await expect(page.getByRole('checkbox', { name: 'draft-mtp', exact: true })).toBeChecked();
+  await page.getByRole('button', { name: 'Save changes', exact: true }).click();
+  await expect.poll(async () => (await bootstrap(request)).workspace.models[0].values.speculation).toBeUndefined();
+});
+
+test('draft bindings stay selected after discovery and remain separate from portable settings', async ({ page, request }) => {
+  await jsonPut(request, '/api/workspace', {
+    ...fixture, base: { speculation: 'draft-simple', draftModel: 'portable-draft.gguf' },
+  });
+  await jsonPut(request, '/api/settings', {
+    draftModelBindings: { tiny: 'mock-draft.gguf' }, modelBindings: { tiny: 'mock-model.gguf' },
+  });
+  await page.goto('/');
+  await openNavigation(page);
+  await page.getByRole('button', { name: 'Machine settings', exact: true }).click();
+  const binding = page.getByRole('combobox', { name: 'Draft file for Tiny coder', exact: true });
+  await expect(binding).toHaveValue('mock-draft.gguf');
+  await expect(binding.getByRole('option', { name: /mock-draft.gguf.*GB/ })).toHaveCount(1);
+  await expect(binding).toHaveValue('mock-draft.gguf');
+  await page.getByRole('button', { name: 'Save settings', exact: true }).click();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  expect((await bootstrap(request)).settings.draftModelBindings).toEqual({ tiny: 'mock-draft.gguf' });
+  const preview = await request.post('/api/preview', { data: { modelId: 'tiny' } });
+  expect(preview.ok()).toBe(true);
+  const { args } = await preview.json() as { args: string[] };
+  expect(args[args.indexOf('--spec-draft-model') + 1]).toBe(path.resolve('tests/fixtures/models/mock-draft.gguf'));
+  expect((await bootstrap(request)).workspace).not.toHaveProperty('draftModelBindings');
+});
+
 test('fits the viewport without horizontal overflow', async ({ page }) => {
   await page.goto('/');
   await openNavigation(page);

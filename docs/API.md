@@ -132,6 +132,40 @@ contain machine settings or authentication credentials.
 
 ## Local bindings
 
+`settings.draftModelBindings` is an optional map of target model configuration IDs
+to discovered relative draft-GGUF paths. It follows the same directory containment
+and symlink rules as `modelBindings`, but is independent: a target model binding
+can never accidentally serve as its draft binding. Omitted entries resolve the
+effective `draftModel` filename uniquely. Missing/ambiguous files are errors.
+
+## Speculation values
+
+`values.speculation` is a comma-separated string of distinct supported
+methods, or `"none"` for disabled. Existing single-method strings need no migration.
+The list overrides its ancestor as a whole. For example:
+
+```json
+{
+  "speculation": "ngram-mod,draft-simple",
+  "draftModel": "small-draft.gguf",
+  "draftGpuLayers": 0,
+  "draftMax": 8,
+  "draftCacheTypeK": "q8_0",
+  "draftCacheTypeV": "f16"
+}
+```
+
+These fields are available at base/group/model levels. Draft paths are resolved
+locally for preview and launch. Portable exports never contain the resolved
+absolute path. Inactive parameters are not emitted. An active external draft
+method requires a draft model; draft-mtp does not. Minimum n-gram tokens must
+not exceed the maximum while ngram-mod is active.
+
+**Standard llama.cpp chooses runtime priority internally**, ignoring list order.
+MCM exposes method selection only, not execution-order controls.
+
+## Target-model bindings
+
 Set `modelBindings[modelId]` to a discovered relative GGUF path through the
 machine settings endpoint. Bindings resolve inside `modelsDirectory`.
 This lets two recipients use the same portable configuration with different

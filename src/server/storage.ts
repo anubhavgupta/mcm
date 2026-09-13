@@ -22,6 +22,7 @@ const settingsShape = {
     } catch { return false; }
   }, 'Use an HTTP(S) origin without credentials, path, query or fragment.'),
   modelBindings: z.record(z.string().regex(/^[a-zA-Z0-9_-]{1,100}$/), relativeBinding),
+  draftModelBindings: z.record(z.string().regex(/^[a-zA-Z0-9_-]{1,100}$/), relativeBinding).optional(),
   hfRepo: z.union([z.literal(''), repoSchema]),
   anthropicMode: z.enum(['passthrough', 'openai']).optional(),
   hfToken: z.string().max(4096).refine(value => !/[\x00-\x20\x7f]/.test(value), 'Invalid token.').optional(),

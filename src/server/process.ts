@@ -112,9 +112,10 @@ export class ProcessManager {
       const group = workspace.groups.find(item => item.id === model.groupId);
       const explicit: Values = { ...workspace.base, ...group?.values, ...model.values };
       for (const field of catalog.fields) {
+        if (!isFieldEnabled(field, values)) continue;
         if (!fieldSupported(field, capabilities.flags) && !Object.hasOwn(explicit, field.key)) {
           const selectedDependent = catalog.fields.find(dependent =>
-            dependent.dependsOn?.key === field.key && Object.hasOwn(explicit, dependent.key) &&
+            dependent.dependsOn?.key === field.key && (Object.hasOwn(explicit, dependent.key) || dependent.required) &&
             isFieldEnabled(dependent, values) && values[dependent.key] !== '' && values[dependent.key] !== false);
           if (selectedDependent) {
             throw new ApiError(400, `${selectedDependent.label} requires ${field.label} (${field.flag}), which this executable does not support. Clear the override or select a compatible executable.`);
@@ -126,8 +127,18 @@ export class ProcessManager {
         }
       }
     }
+    const resolvedFiles: Record<string, string> = {};
+    for (const field of catalog.fields) {
+      if (field.control !== 'model-file' || !isFieldEnabled(field, values)) continue;
+      const filename = values[field.key];
+      if (typeof filename !== 'string' || !filename) continue;
+      resolvedFiles[field.key] = await resolveModel(
+        { ...settings, modelBindings: settings.draftModelBindings ?? {} },
+        { ...model, name: `draft model for ${model.name}`, model: { filename } },
+      );
+    }
     let args: string[];
-    try { args = buildArgs(values, capabilities?.flags); }
+    try { args = buildArgs(values, capabilities?.flags, resolvedFiles); }
     catch (error) { throw new ApiError(400, `${messageOf(error)} Clear the explicit override or select a compatible executable.`); }
     args.push('--model', modelPath, '--host', '127.0.0.1', '--port', String(settings.serverPort));
     if (capabilities?.flags.includes('--metrics')) args.push('--metrics');

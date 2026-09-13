@@ -87,7 +87,21 @@ describe('private atomic persistence', () => {
     await expect(store.saveSettings({ upstreamUrl: 'http://user:password@localhost:8080' })).rejects.toThrow();
     await expect(store.saveSettings({ modelBindings: { model: '../escape.gguf' } })).rejects.toThrow();
     await expect(store.saveSettings({ modelBindings: { model: '/escape.gguf' } })).rejects.toThrow();
+    await expect(store.saveSettings({ draftModelBindings: { model: '../escape.gguf' } })).rejects.toThrow();
+    await expect(store.saveSettings({ draftModelBindings: { model: 'C:/escape.gguf' } })).rejects.toThrow();
     expect(store.getWorkspace()).toEqual(emptyWorkspace());
+  });
+  it('persists draft bindings independently and excludes them from portable workspace data', async () => {
+    await store.saveSettings({
+      modelBindings: { model: 'main/model.gguf' }, draftModelBindings: { model: 'draft/model.gguf' },
+    });
+    const restored = new Store(join(directory, 'data'));
+    await restored.init();
+    expect(restored.publicSettings()).toMatchObject({
+      modelBindings: { model: 'main/model.gguf' }, draftModelBindings: { model: 'draft/model.gguf' },
+    });
+    expect(restored.getWorkspace()).not.toHaveProperty('draftModelBindings');
+    await expect(restored.saveWorkspace({ ...emptyWorkspace(), draftModelBindings: { model: 'draft/model.gguf' } })).rejects.toThrow();
   });
   it('serializes partial settings updates without lost writes and rejects corrupt disk data', async () => {
     await Promise.all([store.saveSettings({ hfRepo: 'owner/repo' }), store.saveSettings({ serverPort: 9000 })]);

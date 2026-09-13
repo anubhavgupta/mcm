@@ -5,7 +5,7 @@ export interface SettingField {
   key: string;
   label: string;
   section: string;
-  control: 'number' | 'select' | 'toggle' | 'text' | 'json';
+  control: 'number' | 'select' | 'toggle' | 'text' | 'json' | 'multi-select' | 'model-file';
   flag?: string;
   aliases?: string[];
   default: SettingValue;
@@ -15,7 +15,9 @@ export interface SettingField {
   integer?: boolean;
   options?: string[];
   omitValues?: SettingValue[];
-  dependsOn?: { key: string; equals: SettingValue };
+  dependsOn?: { key: string; equals?: SettingValue; containsAny?: string[] };
+  required?: boolean;
+  hideWhenDisabled?: boolean;
   description?: string;
 }
 export interface Catalog {
@@ -52,6 +54,7 @@ export interface LocalSettings {
   upstreamUrl: string;
   anthropicMode?: 'passthrough' | 'openai';
   modelBindings: Record<string, string>;
+  draftModelBindings?: Record<string, string>;
   hfRepo: string;
   hfToken?: string;
 }

@@ -183,7 +183,8 @@ export default function App() {
     })} />}
     {modal?.kind === 'settings' && <SettingsDialog settings={settings} workspace={workspace} busy={!!busy} onClose={closeModal} onSave={async values => run('settings', async () => {
       const bindings = Object.fromEntries(Object.entries(values.modelBindings).filter(([, value]) => value !== ''));
-      const result = await api<PublicSettings>('/settings', { method: 'PUT', body: JSON.stringify({ ...values, modelBindings: bindings }) });
+      const draftBindings = Object.fromEntries(Object.entries(values.draftModelBindings ?? {}).filter(([, value]) => value !== ''));
+      const result = await api<PublicSettings>('/settings', { method: 'PUT', body: JSON.stringify({ ...values, modelBindings: bindings, draftModelBindings: draftBindings }) });
       manager.setSettings(result); setCapabilities(null); setModal(null); notify('Machine settings saved. Running processes are unchanged until restart.');
     })} />}
     {modal?.kind === 'share' && <ShareDialog workspace={workspace} selectedModelId={selectedModel?.id} repo={settings.hfRepo} onClose={closeModal} notify={notify} onImport={(incoming, source) => setModal({ kind: 'import', workspace: incoming, source })} />}
