@@ -139,7 +139,15 @@ saved changes synchronize to the Inference window.
 There is only one native Inference window per desktop instance. Close it normally
 or use the main card's restore icon to return the card. Closing it does not stop
 MCM; closing the main app closes the Inference window and shuts down the backend.
-The compact window is resizable, and its native titlebar is managed by the OS.
+The compact window is frameless and resizable. Its Inference header has a grip
+icon for dragging (or use the arrow keys while that icon is focused) and an X
+button to close only the popup. There is no native titlebar.
+User-adjusted size and position are saved locally in `inference-window.json`
+inside the desktop data directory. Bounds are saved after moving/resizing and
+flushed when closing, then restored on reopen and across MCM restarts. Reopening
+an already-open popup focuses it without resetting its dimensions. Geometry is
+not part of shared model configurations. If a changed monitor arrangement leaves
+the popup off-screen, close MCM and remove this file to restore the initial placement.
 
 Browser mode continues to use Document PiP where supported and the in-page
 floating fallback otherwise. Those browser behaviors are independent of desktop's

@@ -921,6 +921,29 @@ test('standalone native inference page displays live telemetry and native theme 
   await expect(page.locator('.usage-summary-note')).toBeHidden();
 });
 
+test('frameless inference offers compact move and close controls', async ({ page }) => {
+  await page.addInitScript(() => {
+    const movements: unknown[] = [];
+    Reflect.set(window, 'nativeMovements', movements);
+    window.bindings = {
+      mcmGetInferenceTheme: async () => 'light-plus',
+      mcmCloseInference: async () => { Reflect.set(window, 'nativeCloseClicked', true); return { open: false }; },
+      mcmDragInference: async movement => { movements.push(movement); },
+    };
+  });
+  await page.goto('/inference');
+  const handle = page.getByRole('button', { name: 'Move inference window', exact: true });
+  await expect(handle).toBeVisible();
+  await handle.focus();
+  await page.keyboard.press('ArrowRight');
+  await expect.poll(() => page.evaluate(() => Reflect.get(window, 'nativeMovements'))).toEqual([
+    { phase: 'start', screenX: 0, screenY: 0 }, { phase: 'end', screenX: 10, screenY: 0 },
+  ]);
+  await page.getByRole('button', { name: 'Close inference window', exact: true }).click();
+  expect(await page.evaluate(() => Reflect.get(window, 'nativeCloseClicked'))).toBe(true);
+  await expect(page.getByRole('alert')).toHaveCount(0);
+});
+
 test('picture-in-picture rejection leaves runtime on the page', async ({ page }) => {
   await page.addInitScript(() => Object.defineProperty(window, 'documentPictureInPicture', {
     value: { requestWindow: () => Promise.reject(new Error('Permission denied')) },

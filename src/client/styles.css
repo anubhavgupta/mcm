@@ -508,6 +508,9 @@ svg { flex-shrink: 0; }
 .executable-version-check .field-help { min-height: 0; }
 .executable-version-check .support-warning { overflow-wrap: anywhere; }
 .inference-heading-actions { display: flex; align-items: center; gap: 8px; }
+.native-inference-controls { display: flex; align-items: center; gap: 2px; }
+.inference-drag-handle { cursor: grab; touch-action: none; user-select: none; }
+.inference-drag-handle:active { cursor: grabbing; }
 .runtime-pip-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 12px; }
 .runtime-pip-toolbar strong { font-size: 14px; }
 .runtime-detached { padding: 12px; min-width: 0; }

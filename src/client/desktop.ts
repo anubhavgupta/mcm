@@ -1,8 +1,8 @@
-import type { DesktopInferenceBindings } from '../shared/desktop';
+import type { DesktopInferenceBindings, InferenceWindowBindings } from '../shared/desktop';
 import { themeSchema } from '../shared/themes';
 
 declare global {
-  interface Window { bindings?: Partial<DesktopInferenceBindings> }
+  interface Window { bindings?: Partial<DesktopInferenceBindings & InferenceWindowBindings> }
 }
 
 export function desktopInference(): DesktopInferenceBindings | undefined {

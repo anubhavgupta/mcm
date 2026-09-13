@@ -2,6 +2,7 @@ import { homedir } from 'node:os';
 import { desktopDataDir, desktopNativeOrigin, desktopPorts } from './options.ts';
 import { startDesktopServer } from './server.ts';
 import { evaluateNative, NativeInferenceManager } from './inference.ts';
+import { InferenceGeometryStore } from './inference-geometry.ts';
 
 let backend: Awaited<ReturnType<typeof startDesktopServer>> | undefined;
 let window: Deno.BrowserWindow | undefined;
@@ -37,6 +38,7 @@ try {
   window = new Deno.BrowserWindow({ title: 'MCM — Model Config Manager', width: 1280, height: 900 });
   inference = new NativeInferenceManager({
     main: window, origin, ready, createWindow: options => new Deno.BrowserWindow(options),
+    geometry: new InferenceGeometryStore(desktopDataDir(Deno.build.os === 'windows' ? 'win32' : Deno.build.os, Deno.env.toObject(), homedir())),
   });
   inference.registerBindings();
   window.addEventListener('close', event => {

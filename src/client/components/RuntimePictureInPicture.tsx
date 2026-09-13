@@ -46,10 +46,18 @@ export function RuntimePictureInPicture({ children, notify }: {
       });
     };
     window.addEventListener('mcm-inference-state', receive);
+    const receiveError = (event: Event) => {
+      if (event instanceof CustomEvent && typeof event.detail?.message === 'string') notify(event.detail.message, true);
+    };
+    window.addEventListener('mcm-inference-error', receiveError);
     const observer = new MutationObserver(publishTheme);
     observer.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
     publishTheme();
-    return () => { active = false; observer.disconnect(); window.removeEventListener('mcm-inference-state', receive); };
+    return () => {
+      active = false; observer.disconnect();
+      window.removeEventListener('mcm-inference-state', receive);
+      window.removeEventListener('mcm-inference-error', receiveError);
+    };
   }, [notify]);
 
   const openFloating = () => {

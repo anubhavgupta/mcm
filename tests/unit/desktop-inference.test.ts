@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { evaluateNative, NativeInferenceError, NativeInferenceManager, type InferenceWindow, type InferenceWindowOptions } from '../../desktop/inference';
 import { desktopNativeOrigin } from '../../desktop/options';
+import type { GeometryPersistence } from '../../desktop/inference-geometry';
 
 class FakeWindow extends EventTarget implements InferenceWindow {
   closed = false;
@@ -11,6 +12,9 @@ class FakeWindow extends EventTarget implements InferenceWindow {
   focus = vi.fn();
   setAlwaysOnTop = vi.fn();
   setSize = vi.fn();
+  getSize = vi.fn<() => [number, number]>().mockReturnValue([300, 320]);
+  getPosition = vi.fn<() => [number, number]>().mockReturnValue([100, 200]);
+  setPosition = vi.fn();
   executeJs = vi.fn<(script: string) => Promise<unknown>>().mockResolvedValue({ ok: true, value: true });
   bind = vi.fn((name: string, handler: (...args: unknown[]) => unknown) => { this.handlers.set(name, handler); });
   userClose() {
@@ -21,7 +25,7 @@ class FakeWindow extends EventTarget implements InferenceWindow {
 
 const defaults = { width: 300, height: 320, theme: 'nord' as const };
 
-function fixture(ready: Promise<unknown> = Promise.resolve()) {
+function fixture(ready: Promise<unknown> = Promise.resolve(), geometry?: GeometryPersistence) {
   const main = new FakeWindow();
   const children: FakeWindow[] = [];
   const createWindow = vi.fn((_options: InferenceWindowOptions) => {
@@ -30,7 +34,7 @@ function fixture(ready: Promise<unknown> = Promise.resolve()) {
     return child;
   });
   const reportError = vi.fn();
-  const manager = new NativeInferenceManager({ main, origin: 'http://127.0.0.1:45678', ready, createWindow, reportError });
+  const manager = new NativeInferenceManager({ main, origin: 'http://127.0.0.1:45678', ready, createWindow, reportError, geometry });
   manager.registerBindings();
   return { manager, bindings: manager.bindings, main, children, createWindow, reportError };
 }
@@ -50,11 +54,11 @@ describe('native inference window', () => {
     resolve();
     await expect(opening).resolves.toEqual({ open: true });
     expect(createWindow).toHaveBeenCalledWith({
-      title: 'MCM Inference', width: 300, height: 320, alwaysOnTop: true, resizable: true,
+      title: 'MCM Inference', width: 300, height: 320, alwaysOnTop: true, resizable: true, frameless: true,
     });
     expect(children[0].navigate).toHaveBeenCalledWith('http://127.0.0.1:45678/inference');
     expect(children[0].setAlwaysOnTop).toHaveBeenCalledWith(true);
-    expect([...children[0].handlers.keys()]).toEqual(['mcmGetInferenceTheme']);
+    expect([...children[0].handlers.keys()]).toEqual(['mcmGetInferenceTheme', 'mcmCloseInference', 'mcmDragInference']);
     await expect(children[0].handlers.get('mcmGetInferenceTheme')!()).resolves.toBe('nord');
     await expect(bindings.mcmInferenceState()).resolves.toEqual({ open: true });
   });
@@ -70,14 +74,12 @@ describe('native inference window', () => {
     }
   });
 
-  it('clamps and rounds finite dimensions', async () => {
-    const { bindings, createWindow, children } = fixture();
-    await bindings.mcmOpenInference({ ...defaults, width: -1, height: 9999 });
-    expect(createWindow).toHaveBeenCalledWith(expect.objectContaining({ width: 240, height: 900 }));
-    await bindings.mcmOpenInference({ ...defaults, width: 9999, height: -1 });
-    expect(children[0].setSize).toHaveBeenCalledWith(600, 200);
-    await bindings.mcmOpenInference({ ...defaults, width: 300.8, height: 320.2 });
-    expect(children[0].setSize).toHaveBeenLastCalledWith(301, 320);
+  it.each([
+    [-1, 9999, 240, 900], [9999, -1, 600, 200], [300.8, 320.2, 301, 320],
+  ])('clamps and rounds initial dimensions %s x %s', async (width, height, expectedWidth, expectedHeight) => {
+    const { bindings, createWindow } = fixture();
+    await bindings.mcmOpenInference({ ...defaults, width, height });
+    expect(createWindow).toHaveBeenCalledWith(expect.objectContaining({ width: expectedWidth, height: expectedHeight }));
   });
 
   it.each([
@@ -101,7 +103,54 @@ describe('native inference window', () => {
     ]);
     expect(createWindow).toHaveBeenCalledTimes(1);
     expect(children[0].focus).toHaveBeenCalledTimes(2);
+    expect(children[0].setSize).not.toHaveBeenCalled();
     expect(children[0].executeJs).toHaveBeenCalledWith(expect.stringContaining('"mcm-inference-theme"'));
+  });
+  it('restores saved bounds and remembers adjustments on close and subsequent reopen', async () => {
+    const geometry = {
+      load: vi.fn().mockResolvedValue({ width: 420, height: 650, x: -800, y: 125 }),
+      save: vi.fn().mockResolvedValue(undefined),
+    };
+    const { bindings, createWindow, children } = fixture(Promise.resolve(), geometry);
+    await bindings.mcmOpenInference(defaults);
+    expect(createWindow).toHaveBeenCalledWith(expect.objectContaining({ width: 420, height: 650, x: -800, y: 125 }));
+    children[0].getSize.mockReturnValue([500, 700]);
+    children[0].getPosition.mockReturnValue([-600, 150]);
+    await bindings.mcmCloseInference();
+    expect(geometry.save).toHaveBeenLastCalledWith({ width: 500, height: 700, x: -600, y: 150 });
+    await bindings.mcmOpenInference(defaults);
+    expect(createWindow).toHaveBeenLastCalledWith(expect.objectContaining({ width: 500, height: 700, x: -600, y: 150 }));
+    expect(geometry.load).toHaveBeenCalledTimes(1);
+  });
+  it('debounces move/resize persistence and flushes on shutdown', async () => {
+    vi.useFakeTimers();
+    try {
+      const geometry = { load: vi.fn().mockResolvedValue(undefined), save: vi.fn().mockResolvedValue(undefined) };
+      const { bindings, children, manager } = fixture(Promise.resolve(), geometry);
+      await bindings.mcmOpenInference(defaults);
+      children[0].getSize.mockReturnValue([400, 500]);
+      children[0].dispatchEvent(new Event('resize'));
+      children[0].getPosition.mockReturnValue([200, 250]);
+      children[0].dispatchEvent(new Event('move'));
+      expect(geometry.save).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(250);
+      expect(geometry.save).toHaveBeenCalledTimes(1);
+      expect(geometry.save).toHaveBeenLastCalledWith({ width: 400, height: 500, x: 200, y: 250 });
+      children[0].getPosition.mockReturnValue([300, 350]);
+      children[0].dispatchEvent(new Event('move'));
+      await manager.shutdown();
+      expect(geometry.save).toHaveBeenLastCalledWith({ width: 400, height: 500, x: 300, y: 350 });
+      expect(vi.getTimerCount()).toBe(0);
+    } finally { vi.useRealTimers(); }
+  });
+  it('reports persistence errors without trapping the user in the popup', async () => {
+    const geometry = { load: vi.fn().mockResolvedValue(undefined), save: vi.fn().mockRejectedValue(new Error('disk full')) };
+    const { bindings, children, main, reportError } = fixture(Promise.resolve(), geometry);
+    await bindings.mcmOpenInference(defaults);
+    await bindings.mcmCloseInference();
+    expect(children[0].closed).toBe(true);
+    expect(reportError).toHaveBeenCalled();
+    expect(main.executeJs).toHaveBeenCalledWith(expect.stringContaining('mcm-inference-error'));
   });
 
   it('OS close restores the parent state without closing main, and permits reopen', async () => {
@@ -149,6 +198,25 @@ describe('native inference window', () => {
     await bindings.mcmCloseInference();
     expect(children[0].close).toHaveBeenCalledTimes(1);
     expect(main.executeJs).toHaveBeenCalledTimes(1);
+  });
+  it('moves the frameless child relative to the initial screen position and stops after release', async () => {
+    const { bindings, children } = fixture();
+    await bindings.mcmOpenInference(defaults);
+    const drag = children[0].handlers.get('mcmDragInference')!;
+    await drag({ phase: 'start', screenX: 400, screenY: 500 });
+    await drag({ phase: 'move', screenX: 430, screenY: 540 });
+    expect(children[0].setPosition).toHaveBeenLastCalledWith(130, 240);
+    await drag({ phase: 'end', screenX: 450, screenY: 560 });
+    expect(children[0].setPosition).toHaveBeenLastCalledWith(150, 260);
+    await drag({ phase: 'move', screenX: 900, screenY: 900 });
+    expect(children[0].setPosition).toHaveBeenCalledTimes(2);
+    await expect(drag({ phase: 'start', screenX: Infinity, screenY: 0 })).rejects.toThrow('Invalid inference drag');
+    await children[0].handlers.get('mcmCloseInference')!();
+    expect(children[0].closed).toBe(true);
+    await bindings.mcmOpenInference(defaults);
+    await children[0].handlers.get('mcmCloseInference')!();
+    expect(children[1].closed).toBe(false);
+    await expect(drag({ phase: 'start', screenX: 0, screenY: 0 })).rejects.toThrow('window is closed');
   });
 
   it('persists the latest valid theme while closed, propagates it live and reads it after reopen', async () => {
