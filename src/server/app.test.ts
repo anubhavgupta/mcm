@@ -37,6 +37,20 @@ afterEach(async () => {
 });
 
 describe('management API validation and privacy', () => {
+  it('validates machine themes without exposing them in portable workspace data', async () => {
+    const base = await app();
+    const update = (data: unknown) => fetch(`${base}/api/settings`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data),
+    });
+    expect((await (await fetch(`${base}/api/bootstrap`)).json()).settings.theme).toBe('light-plus');
+    expect(await (await update({ theme: 'tokyo-night' })).json()).toMatchObject({ theme: 'tokyo-night' });
+    for (const theme of ['unknown', 'Dark+', null, {}]) expect((await update({ theme })).status).toBe(400);
+    await update({ hfRepo: 'owner/config' });
+    const bootstrap = await (await fetch(`${base}/api/bootstrap`)).json();
+    expect(bootstrap.settings.theme).toBe('tokyo-night');
+    expect(bootstrap.workspace).not.toHaveProperty('theme');
+    expect(await readFile(join(directory, 'workspace.json'), 'utf8')).not.toContain('tokyo-night');
+  });
   async function versionFixture(version: string): Promise<string> {
     const path = join(directory, `binary-${randomUUID()}.mjs`);
     await writeFile(path, `#!${process.execPath}\nconsole.log(process.argv.includes('--version') ? ${JSON.stringify(`version: ${version}`)} : '--model --host --port --threads');`);

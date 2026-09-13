@@ -1,12 +1,14 @@
-import { useState } from 'react';
+import { useLayoutEffect, useState } from 'react';
 import { useForm, useWatch } from 'react-hook-form';
-import { FolderSearch, LockKeyhole, RefreshCw, Save } from 'lucide-react';
+import { FolderSearch, LockKeyhole, Palette, RefreshCw, Save } from 'lucide-react';
 import { repoSchema, resolveConfig } from '../../shared/config';
 import type { ExecutableVersion, LocalSettings, PublicSettings, Workspace } from '../../shared/types';
 import { Dialog } from './Dialog';
 import { useUnsavedWarning } from '../hooks/useUnsavedWarning';
 import { useModelFiles } from '../hooks/useModelFiles';
 import { ExecutableVersionCheck } from './ExecutableVersionCheck';
+import { defaultTheme, themes } from '../../shared/themes';
+import { applyTheme, restoreSavedTheme } from '../theme';
 
 interface SettingsValues extends LocalSettings { clearHfToken: boolean }
 
@@ -16,6 +18,7 @@ export function SettingsDialog({ settings, workspace, onClose, onSave, busy }: {
 }) {
   const form = useForm<SettingsValues>({
     defaultValues: {
+      theme: settings.theme ?? defaultTheme,
       executablePath: settings.executablePath, modelsDirectory: settings.modelsDirectory,
       serverPort: settings.serverPort, upstreamUrl: settings.upstreamUrl,
       anthropicMode: settings.anthropicMode ?? 'passthrough',
@@ -24,6 +27,11 @@ export function SettingsDialog({ settings, workspace, onClose, onSave, busy }: {
     },
   });
   useUnsavedWarning(form.formState.isDirty);
+  const theme = useWatch({ control: form.control, name: 'theme' });
+  useLayoutEffect(() => {
+    applyTheme(theme ?? defaultTheme);
+    return restoreSavedTheme;
+  }, [theme]);
   const clearToken = useWatch({ control: form.control, name: 'clearHfToken' });
   const executablePath = useWatch({ control: form.control, name: 'executablePath' });
   const [checkedVersion, setCheckedVersion] = useState<ExecutableVersion | undefined>();
@@ -35,6 +43,19 @@ export function SettingsDialog({ settings, workspace, onClose, onSave, busy }: {
   };
   return <Dialog title="Machine settings" subtitle="Local to this machine. Never included in a shared workspace." onClose={close} wide>
     <form className="dialog-form" onSubmit={form.handleSubmit(values => onSave(values, checkedVersion?.executablePath === values.executablePath ? checkedVersion : undefined))} noValidate>
+      <section aria-labelledby="appearance-heading">
+        <div className="form-divider"><div><Palette size={17} /><h3 id="appearance-heading">Appearance</h3></div><span className="subtle-badge">Machine only</span></div>
+        <div className="form-field"><label htmlFor="settings-theme">Theme</label>
+          <select id="settings-theme" {...form.register('theme')} disabled={busy} aria-describedby="theme-help">
+            {themes.map(preset => <option key={preset.id} value={preset.id}>{preset.name}</option>)}
+          </select>
+          <p id="theme-help" className="field-help">Preview instantly. Save settings to keep this theme; Cancel restores your saved choice. These MCM palettes are inspired by popular VS Code themes.</p>
+        </div>
+        <div className="theme-preview" aria-label="Theme preview">
+          <span className="theme-preview-accent">Accent</span><span>Editor text</span>
+          <span className="muted">Secondary text</span><span className="theme-preview-success">Ready</span>
+        </div>
+      </section>
       <div className="settings-form-grid">
         <div className="form-field full-width"><label htmlFor="executable-path">llama-server executable path</label><input id="executable-path" placeholder="/path/to/llama-server" {...form.register('executablePath')} /><p className="field-help">The machine default. Base, Group and Model can override it locally. Check version runs this path before saving. Changes apply on the next launch.</p>
           <ExecutableVersionCheck path={executablePath} expected={workspace.llamaVersion} disabled={busy} onChecked={setCheckedVersion} />

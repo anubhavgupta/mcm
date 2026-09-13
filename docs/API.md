@@ -33,6 +33,16 @@ still receives Anthropic JSON or SSE. Streaming translation requests
 observed before response conversion, so token accounting does not depend on
 the Anthropic protocol exposing per-token usage.
 
+Machine settings also accept `theme` with one of these stable IDs:
+`dark-plus`, `light-plus`, `dracula`, `one-dark-pro`, `github-dark`,
+`github-light`, `nord`, `tokyo-night`, `solarized-dark`, or `monokai`.
+`PUT /api/settings` persists the choice; `GET /api/bootstrap` returns it in
+`settings.theme`. Older settings files without a theme default to `light-plus`.
+Omitting `theme` from an update preserves the saved choice. Unknown IDs are
+rejected (HTTP 400), and invalid persisted IDs fail validation rather than
+silently resetting. Themes are machine-local and excluded from every workspace
+export and Hugging Face transfer. No theme import endpoint is provided.
+
 Management endpoints remain localhost and same-origin only. The inference proxy at `/v1`
 allows all browser origins without credentialed CORS, handles `OPTIONS`
 preflights locally, and permits requested API headers (including `Authorization`,

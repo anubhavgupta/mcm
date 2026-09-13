@@ -3,6 +3,7 @@ import { z } from 'zod';
 import type { Bootstrap, LogEntry, PublicSettings, ServerStatus, Throughput, UsageSummary, Workspace } from '../../shared/types';
 import { usageSummarySchema } from '../../shared/usage';
 import { api, errorMessage } from '../api';
+import { applySavedTheme } from '../theme';
 
 const statusSchema = z.object({
   phase: z.enum(['stopped', 'starting', 'ready', 'stopping', 'failed']),
@@ -41,6 +42,7 @@ export function useManager() {
     try {
       const result = await api<Bootstrap>('/bootstrap');
       const initialUsage = usageSummarySchema.parse(result.usage);
+      result.settings.theme = applySavedTheme(result.settings.theme);
       setData(result);
       setStatus(result.status);
       setUsage(current => current ?? initialUsage);
@@ -90,6 +92,9 @@ export function useManager() {
   }, []);
 
   const setWorkspace = (workspace: Workspace) => setData(current => current ? { ...current, workspace } : current);
-  const setSettings = (settings: PublicSettings) => setData(current => current ? { ...current, settings } : current);
+  const setSettings = (settings: PublicSettings) => {
+    const theme = applySavedTheme(settings.theme);
+    setData(current => current ? { ...current, settings: { ...settings, theme } } : current);
+  };
   return { data, error, loading, reload, connected, status, setStatus, logs, clearLogs: () => setLogs([]), throughput, usage, setWorkspace, setSettings };
 }

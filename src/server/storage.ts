@@ -4,6 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { emptyWorkspace, repoSchema, workspaceSchema } from '../shared/config';
 import type { LocalSettings, PublicSettings, Workspace } from '../shared/types';
+import { defaultTheme, themeSchema } from '../shared/themes';
 
 export const relativeBinding = z.string().min(1).max(4096).refine(value =>
   !isAbsolute(value) && !value.includes('\\') && !value.includes(':') && !value.includes('\0') &&
@@ -17,6 +18,7 @@ const executableOverridesSchema = z.object({
   models: z.record(z.string().regex(/^[a-zA-Z0-9_-]{1,100}$/), executablePathSchema).optional(),
 }).strict();
 const settingsShape = {
+  theme: themeSchema.removeDefault(),
   executablePath: pathString,
   executableOverrides: executableOverridesSchema.optional(),
   modelsDirectory: pathString,
@@ -34,9 +36,10 @@ const settingsShape = {
   anthropicMode: z.enum(['passthrough', 'openai']).optional(),
   hfToken: z.string().max(4096).refine(value => !/[\x00-\x20\x7f]/.test(value), 'Invalid token.').optional(),
 };
-export const settingsSchema = z.object(settingsShape).strict();
+export const settingsSchema = z.object(settingsShape).extend({ theme: themeSchema }).strict();
 export const settingsUpdateSchema = z.object(settingsShape).partial().extend({ clearHfToken: z.boolean().optional() }).strict();
 export const defaultSettings: LocalSettings = {
+  theme: defaultTheme,
   executablePath: '', modelsDirectory: '', serverPort: 8080, upstreamUrl: '', modelBindings: {}, hfRepo: '', anthropicMode: 'passthrough',
 };
 

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { Activity, ArrowDownLeft, PictureInPicture2 } from 'lucide-react';
+import { mirrorTheme } from '../theme';
 
 declare global {
   interface Window {
@@ -17,6 +18,7 @@ export function RuntimePictureInPicture({ children, notify }: {
   const [floating, setFloating] = useState(false);
   const [opening, setOpening] = useState(false);
   const pip = useRef<Window | null>(null);
+  const stopMirroring = useRef<(() => void) | null>(null);
   const mounted = useRef(true);
   const trigger = useRef<HTMLButtonElement>(null);
   const inlineContent = useRef<HTMLDivElement>(null);
@@ -25,11 +27,14 @@ export function RuntimePictureInPicture({ children, notify }: {
     mounted.current = true;
     return () => {
       mounted.current = false;
+      stopMirroring.current?.();
       pip.current?.close();
     };
   }, []);
 
   const restore = () => {
+    stopMirroring.current?.();
+    stopMirroring.current = null;
     pip.current?.close();
     pip.current = null;
     setTarget(null);
@@ -69,6 +74,8 @@ export function RuntimePictureInPicture({ children, notify }: {
       pip.current = child;
       child.addEventListener('pagehide', () => {
         if (pip.current !== child) return;
+        stopMirroring.current?.();
+        stopMirroring.current = null;
         pip.current = null;
         if (mounted.current) { setTarget(null); trigger.current?.focus(); }
       }, { once: true });
@@ -79,8 +86,11 @@ export function RuntimePictureInPicture({ children, notify }: {
         child.document.head.appendChild(copy);
       });
       child.document.body.className = 'runtime-pip-document';
+      stopMirroring.current = mirrorTheme(child.document);
       setTarget(child.document.body);
     } catch (error) {
+      stopMirroring.current?.();
+      stopMirroring.current = null;
       pip.current?.close();
       pip.current = null;
       notify(`Unable to open picture-in-picture: ${error instanceof Error ? error.message : 'Browser request failed.'}`, true);

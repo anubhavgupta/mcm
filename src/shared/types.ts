@@ -1,3 +1,5 @@
+import type { ThemeId } from './themes';
+
 export type SettingValue = string | number | boolean;
 export type Values = Record<string, SettingValue>;
 
@@ -57,6 +59,7 @@ export interface Workspace {
   models: ModelConfig[];
 }
 export interface LocalSettings {
+  theme?: ThemeId;
   executablePath: string;
   executableOverrides?: ExecutableOverrides;
   modelsDirectory: string;

@@ -57,6 +57,7 @@ test.beforeEach(async ({ request }) => {
     serverPort: await freePort(),
     upstreamUrl: '',
     anthropicMode: 'passthrough',
+    theme: 'light-plus',
     modelBindings: {},
     hfRepo: '',
     clearHfToken: true,
@@ -622,6 +623,7 @@ test('Machine Settings checks the unsaved executable version before saving', asy
   await expect(dialog.getByText('b9001 (fedcba98)', { exact: true })).toBeVisible();
   expect((await bootstrap(request)).settings.executablePath).toBe(path.resolve('tests/fixtures/llama-server.mjs'));
   await dialog.getByRole('button', { name: 'Save settings', exact: true }).click();
+  await expect(dialog).toHaveCount(0);
   await expect.poll(async () => (await bootstrap(request)).settings.executablePath).toBe(other);
   expect((await bootstrap(request)).workspace.llamaVersion).toBe('b9001 (fedcba98)');
 });
@@ -705,6 +707,13 @@ test('inference floats and restores when native picture-in-picture is unavailabl
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
   await expect(floating.getByRole('heading', { name: 'Executable', exact: true })).toHaveCount(0);
   await expect(page.getByRole('heading', { name: 'Server logs', exact: true })).toBeVisible();
+  await openNavigation(page);
+  await page.getByRole('button', { name: 'Machine settings', exact: true }).click();
+  await page.getByRole('combobox', { name: 'Theme', exact: true }).selectOption('dracula');
+  await expect(floating.locator('.runtime-card')).toHaveCSS('background-color', 'rgb(45, 46, 62)');
+  page.once('dialog', dialog => dialog.accept());
+  await page.getByRole('button', { name: 'Cancel', exact: true }).click();
+  await expect(floating.locator('.runtime-card')).toHaveCSS('background-color', 'rgb(255, 255, 255)');
   await floating.getByRole('button', { name: 'Return inference to page' }).click();
   await expect(floating).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Open inference picture-in-picture' })).toBeVisible();
@@ -736,6 +745,22 @@ test('native inference picture-in-picture restores after closing its window', as
     await expect(pip.getByRole('log')).toHaveCount(0);
     await expect(page.getByRole('heading', { name: 'Executable', exact: true })).toBeVisible();
     await expect(pip.getByText('Token generation', { exact: false })).toBeVisible();
+    await page.getByRole('button', { name: 'Machine settings', exact: true }).click();
+    await page.getByRole('combobox', { name: 'Theme', exact: true }).selectOption('tokyo-night');
+    await expect(pip.locator('html')).toHaveAttribute('data-theme', 'tokyo-night');
+    await expect(pip.locator('html')).toHaveCSS('color-scheme', 'dark');
+    await expect(pip.locator('.runtime-card')).toHaveCSS('background-color', 'rgb(35, 38, 59)');
+    page.once('dialog', dialog => dialog.accept());
+    await page.getByRole('button', { name: 'Cancel', exact: true }).click();
+    await expect(pip.locator('html')).toHaveAttribute('data-theme', 'light-plus');
+    await expect(pip.locator('.runtime-card')).toHaveCSS('background-color', 'rgb(255, 255, 255)');
+    await page.getByRole('button', { name: 'Machine settings', exact: true }).click();
+    await page.getByRole('combobox', { name: 'Theme', exact: true }).selectOption('nord');
+    await page.getByRole('button', { name: 'Save settings', exact: true }).click();
+    await expect(page.getByRole('dialog')).toHaveCount(0);
+    await expect(pip.locator('html')).toHaveAttribute('data-theme', 'nord');
+    await expect(pip.locator('.runtime-card')).toHaveCSS('background-color', 'rgb(53, 62, 79)');
+    expect((await bootstrap(request)).settings.theme).toBe('nord');
     const launch = await request.post('/api/launch', { data: { modelId: 'tiny' } });
     expect(launch.ok()).toBe(true);
     await expect.poll(async () => (await bootstrap(request)).status.phase).toBe('ready');

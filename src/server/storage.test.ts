@@ -16,6 +16,26 @@ beforeEach(async () => {
 afterEach(async () => { await rm(directory, { recursive: true, force: true }); });
 
 describe('private atomic persistence', () => {
+  it('defaults legacy themes to Light+ and persists only machine-local valid presets', async () => {
+    expect(store.publicSettings().theme).toBe('light-plus');
+    const { theme: _theme, ...legacy } = store.getSettings();
+    await writeFile(join(directory, 'data/settings.json'), JSON.stringify(legacy));
+    const restored = new Store(join(directory, 'data'));
+    await restored.init();
+    expect(restored.getSettings().theme).toBe('light-plus');
+    await restored.saveSettings({ theme: 'dracula' });
+    await restored.saveSettings({ serverPort: 9001 });
+    const reopened = new Store(join(directory, 'data'));
+    await reopened.init();
+    expect(reopened.publicSettings().theme).toBe('dracula');
+    expect(reopened.getWorkspace()).not.toHaveProperty('theme');
+    const before = await readFile(join(directory, 'data/settings.json'), 'utf8');
+    for (const theme of ['unknown', null, {}, '']) await expect(reopened.saveSettings({ theme })).rejects.toThrow();
+    expect(await readFile(join(directory, 'data/settings.json'), 'utf8')).toBe(before);
+    await expect(reopened.saveWorkspace({ ...emptyWorkspace(), theme: 'dracula' })).rejects.toThrow();
+    await writeFile(join(directory, 'data/settings.json'), JSON.stringify({ ...legacy, theme: 'unknown' }));
+    await expect(new Store(join(directory, 'data')).init()).rejects.toThrow('Cannot load settings.json');
+  });
   it('persists optional machine-local executable overrides and allows removing individual layers', async () => {
     expect(store.getSettings().executableOverrides).toBeUndefined();
     const overrides = { base: '/local/base', groups: { group: '/local/group' }, models: { model: '/local/model' } };

@@ -146,6 +146,22 @@ Model configurations contain a display name, GGUF **filename** and optional
 model repository identifier. MCM does not automatically download or guess a
 replacement model when a shared filename cannot be resolved locally.
 
+## Appearance
+
+Open **Machine settings → Appearance → Theme** to choose a built-in palette:
+**Dark+**, **Light+**, **Dracula**, **One Dark Pro**, **GitHub Dark**,
+**GitHub Light**, **Nord**, **Tokyo Night**, **Solarized Dark**, or **Monokai**.
+These are original MCM palettes inspired by popular VS Code themes, not bundled
+extensions or official ports. Theme JSON import is not required or supported.
+
+Selection previews immediately throughout MCM, including an already-open
+Inference picture-in-picture window or its in-tab fallback. **Cancel** restores
+the saved choice; **Save settings** persists it on this machine. Native controls
+use the corresponding light/dark color scheme; the browser controls PiP window
+chrome. **Light+** is the default, including for older settings without a theme.
+The saved server preference is applied at bootstrap and survives page reloads.
+Themes are never included in workspace JSON, share links, or Hugging Face pushes.
+
 ## Portable sharing and local privacy
 
 There are two distinct documents:
@@ -153,7 +169,7 @@ There are two distinct documents:
 | Document | Contents | Shared? |
 |---|---|---|
 | Workspace | Base, groups, model identities and overrides, schema version | Yes |
-| Machine settings | Executable path, model directory/bindings, ports, upstream URL, HF destination/token | No |
+| Machine settings | Theme, executable path, model directory/bindings, ports, upstream URL, HF destination/token | No |
 
 When a model is selected, sharing defaults to **Selected model only**, including
 its base settings and assigned group so inheritance is preserved. Choose
