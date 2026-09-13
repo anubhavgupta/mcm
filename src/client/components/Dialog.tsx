@@ -23,8 +23,10 @@ export function Dialog({ title, subtitle, onClose, children, wide = false }: {
         <div><p className="eyebrow">MODEL CONFIG MANAGER</p><h2 id="dialog-title">{title}</h2>{subtitle && <p className="muted">{subtitle}</p>}</div>
         <button type="button" className="icon-button" onClick={onClose} aria-label="Close dialog"><X size={20} /></button>
       </div>
-      <DialogFeedback />
-      {children}
+      <div className="dialog-body">
+        <DialogFeedback />
+        {children}
+      </div>
     </dialog>
   );
 }

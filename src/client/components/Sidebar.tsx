@@ -1,4 +1,4 @@
-import { Box, ChevronDown, ChevronLeft, Folder, Layers3, Plus, Settings2, Share2, X } from 'lucide-react';
+import { Box, ChevronLeft, Folder, Layers3, Plus, Settings2, Share2, X } from 'lucide-react';
 import { useEffect, useRef } from 'react';
 import type { Workspace } from '../../shared/types';
 
@@ -30,7 +30,6 @@ export function Sidebar({ workspace, selection, select, open, close, collapsed, 
         <button className="icon-button mobile-only" onClick={close} aria-label="Close sidebar"><X size={18} /></button>
         <button className="icon-button desktop-only collapse-button" onClick={toggleCollapsed} aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}><ChevronLeft size={16} /></button>
       </div>
-      <div className="workspace-label"><span className="workspace-avatar">W</span><span>My workspace<small>Local · personal</small></span><ChevronDown size={14} /></div>
       <div className="nav-heading"><span>CONFIGURATIONS</span><span>{workspace.models.length}</span></div>
       <nav className="config-nav">
         <button type="button" className={`nav-item ${selection.kind === 'base' ? 'selected' : ''}`}

@@ -90,7 +90,7 @@ export function ConfigEditor({ workspace, selection, capabilities, onDirty, onSa
               <Controller control={form.control} name={`values.${field.key}`}
                 rules={{ validate: value => !enabled || !form.getValues(`overrides.${field.key}`) || fieldError(field, value) || true }}
                 render={({ field: input, fieldState }) => {
-                  const common = { id: fieldId, name: input.name, ref: input.ref, onBlur: input.onBlur, disabled: !enabled || !overridden || busy, 'aria-invalid': !!fieldState.error, 'aria-required': enabled && field.required, 'aria-describedby': `${fieldId}-help${field.key === 'speculation' ? ` ${fieldId}-priority` : ''}${fieldState.error ? ` ${fieldId}-error` : ''}` };
+                  const common = { id: fieldId, name: input.name, ref: input.ref, onBlur: input.onBlur, disabled: !enabled || !overridden || busy, 'aria-invalid': !!fieldState.error, 'aria-required': enabled && field.required, 'aria-describedby': `${fieldId}-help${fieldState.error ? ` ${fieldId}-error` : ''}` };
                   const update = (value: SettingValue) => input.onChange(value);
                   return <>
                     {field.control === 'multi-select' ? <MethodSelect id={fieldId} name={input.name} inputRef={input.ref} value={String(input.value ?? 'none')} options={field.options ?? []} disabled={common.disabled} onChange={update} onBlur={input.onBlur} describedBy={common['aria-describedby']} invalid={common['aria-invalid']} />
@@ -105,7 +105,6 @@ export function ConfigEditor({ workspace, selection, capabilities, onDirty, onSa
               <p className="field-help" id={`${fieldId}-help`}>{!enabled ? `Available when ${catalog.fields.find(item => item.key === field.dependsOn?.key)?.label ?? field.dependsOn?.key} ${field.dependsOn?.containsAny ? `includes ${field.dependsOn.containsAny.join(' or ')}` : `is ${String(field.dependsOn?.equals)}`}.` : field.description ?? (selectedFlag ? selectedFlag : 'Configuration preference')}
                 {enabled && field.required && effective[field.key] === '' && ` Required before launch: override ${field.label} and choose a GGUF file, or inherit one from Base or Group.${selection.kind !== 'model' ? ' Base and Group configurations can be saved without a file for models to supply later.' : ''}`}
               </p>
-              {field.key === 'speculation' && <p className="execution-priority-warning" id={`${fieldId}-priority`}>              Standard llama.cpp determines the execution priority of the selected methods.</p>}
               {!supported && <p className="support-warning"><CircleHelp size={13} />Not supported by the probed executable</p>}
               {capabilities && selectedFlag && selectedFlag !== field.flag && <p className="alias-note">Compatible alias: <code>{selectedFlag}</code></p>}
               <div className="field-bottom"><code>{field.flag ?? 'preference'}</code>

@@ -19,7 +19,7 @@ export function RuntimePanel({ connected, status, throughput, usage, logs, clear
   const supported = capabilities ? catalog.fields.filter(field => fieldSupported(field, capabilities.flags)).length : 0;
   return <aside className="runtime-panel" aria-label="Runtime">
     <RuntimePictureInPicture notify={notify}>
-    <section className="runtime-card"><div className="runtime-heading"><h2><Activity size={16} />Inference</h2><span className={`status-pill ${connected ? 'live' : ''}`}><span className="tiny-dot" />{connected ? 'LIVE' : 'OFFLINE'}</span></div>
+    {pipControl => <section className="runtime-card"><div className="runtime-heading"><h2><Activity size={16} />Inference</h2><div className="inference-heading-actions"><span className={`status-pill ${connected ? 'live' : ''}`}><span className="tiny-dot" />{connected ? 'LIVE' : 'OFFLINE'}</span>{pipControl}</div></div>
       <div className="metrics-grid"><div><span>Prompt processing <abbr title="Prompt processing">PP</abbr></span><strong>{metric(throughput?.pp)}</strong><small>{throughput?.pp == null ? 'Unavailable · tokens/sec' : 'tokens/sec'}</small></div><div><span>Token generation <abbr title="Token generation">TG</abbr></span><strong>{metric(throughput?.tg)}</strong><small>{throughput?.tg == null ? 'Unavailable · tokens/sec' : 'tokens/sec'}</small></div></div>
       <div className="metric-footnote"><Radio size={13} />{!connected ? 'Disconnected · last received values'
         : throughput?.measurement === 'prometheus' ? 'Server metrics · Aggregate rates'
@@ -27,7 +27,7 @@ export function RuntimePanel({ connected, status, throughput, usage, logs, clear
             : 'Waiting for an inference request'}</div>
       {throughput && <div className="token-counts"><span>Request input <strong>{throughput.inputTokens ?? '—'}</strong></span><span>Request output <strong>{throughput.outputTokens ?? '—'}</strong></span></div>}
       <UsageTotals usage={usage} />
-    </section>
+    </section>}
     </RuntimePictureInPicture>
     <section className="runtime-card executable-card"><div className="runtime-heading"><h2><FileTerminal size={16} />Executable</h2></div>
       <p className="runtime-description">{capabilities ? `${supported} of ${catalog.fields.length} settings supported by this build.` : 'Check your llama.cpp build for compatible flags and aliases.'}</p>

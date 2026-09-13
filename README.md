@@ -294,7 +294,7 @@ timing placeholders do not replace them. The card follows the most recently star
 inference request, rather than alternating between concurrent requests or model-list
 requests. A new inference request starts with unavailable timings until measured.
 
-Choose **Picture-in-picture** above the Inference card to move its live throughput
+Choose the **Picture-in-picture icon** in the Inference card header to move its live throughput
 and token counts into an always-on-top window. Executable controls and server logs
 stay on the main page. Close the PiP window or use **Restore inference card**
 on the main page to restore it. Keep the main MCM tab open: it owns the event

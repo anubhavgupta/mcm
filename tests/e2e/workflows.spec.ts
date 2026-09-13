@@ -559,9 +559,61 @@ test('draft bindings stay selected after discovery and remain separate from port
   expect((await bootstrap(request)).workspace).not.toHaveProperty('draftModelBindings');
 });
 
+test('dropdown chevrons remain centered with consistent clearance in cards and dialogs', async ({ page }) => {
+  await page.goto('/');
+  const assertChevron = async (select: import('@playwright/test').Locator) => {
+    await expect(select).toBeVisible();
+    expect(await select.evaluate(element => {
+      const style = getComputedStyle(element);
+      return {
+        appearance: style.appearance, position: style.backgroundPosition,
+        size: style.backgroundSize, repeat: style.backgroundRepeat,
+        padding: style.paddingRight, hasIcon: style.backgroundImage.startsWith('url('),
+      };
+    })).toEqual({
+      appearance: 'none', position: 'calc(100% - 10px) 50%', size: '16px 16px',
+      repeat: 'no-repeat', padding: '36px', hasIcon: true,
+    });
+  };
+  await assertChevron(page.getByRole('combobox', { name: 'Load mode', exact: true }));
+  await assertChevron(page.getByRole('combobox', { name: 'Key cache type', exact: true }));
+  await openNavigation(page);
+  await page.getByRole('button', { name: 'Machine settings', exact: true }).click();
+  await assertChevron(page.getByRole('combobox', { name: 'Anthropic proxy mode', exact: true }));
+});
+
+test('dialog headers and footers remain fixed while their bodies scroll', async ({ page }) => {
+  await page.goto('/');
+  await openNavigation(page);
+  await page.getByRole('button', { name: 'Machine settings', exact: true }).click();
+  const dialog = page.getByRole('dialog');
+  for (const lastAction of ['Save settings', 'Done']) {
+    const header = dialog.locator('.dialog-header');
+    const before = await header.boundingBox();
+    const footer = dialog.locator('.dialog-actions');
+    const footerBefore = await footer.boundingBox();
+    await expect(dialog.getByRole('button', { name: lastAction, exact: true })).toBeInViewport();
+    const body = dialog.locator('.dialog-body');
+    await expect.poll(() => body.evaluate(element => element.scrollHeight - element.clientHeight)).toBeGreaterThan(0);
+    await body.evaluate(element => { element.scrollTop = element.scrollHeight; });
+    expect(await body.evaluate(element => element.scrollTop)).toBeGreaterThan(0);
+    const after = await header.boundingBox();
+    const footerAfter = await footer.boundingBox();
+    expect(after!.y).toBeCloseTo(before!.y, 1);
+    expect(after!.height).toBeCloseTo(before!.height, 1);
+    expect(Math.abs(footerAfter!.y - footerBefore!.y)).toBeLessThanOrEqual(1);
+    expect(await dialog.evaluate(element => element.scrollTop)).toBe(0);
+    await expect(dialog.getByRole('button', { name: 'Close dialog' })).toBeInViewport();
+    await expect(dialog.getByRole('button', { name: lastAction, exact: true })).toBeInViewport();
+    await dialog.getByRole('button', { name: 'Close dialog' }).click();
+    if (lastAction === 'Save settings') await page.getByRole('button', { name: 'Share', exact: true }).click();
+  }
+});
+
 test('fits the viewport without horizontal overflow', async ({ page }) => {
   await page.goto('/');
   await openNavigation(page);
+  await expect(page.getByText('My workspace', { exact: true })).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Machine settings', exact: true })).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
   await page.getByRole('button', { name: 'Machine settings', exact: true }).click();
@@ -578,7 +630,11 @@ test('inference floats and restores when native picture-in-picture is unavailabl
   }));
   await page.goto('/');
   await expect(page.locator('.usage-unpriced-note')).toBeVisible();
-  await page.getByRole('button', { name: 'Open inference picture-in-picture' }).click();
+  const pipButton = page.getByRole('button', { name: 'Open inference picture-in-picture' });
+  await expect(page.locator('.runtime-card').filter({ has: pipButton }).getByRole('heading', { name: 'Inference', exact: true })).toBeVisible();
+  await expect(pipButton).toHaveText('');
+  await expect(pipButton.locator('svg')).toHaveCount(1);
+  await pipButton.click();
   const floating = page.getByRole('region', { name: 'Floating inference card' });
   await expect(floating.getByText('Token generation', { exact: false })).toBeVisible();
   await expect(floating.locator('.usage-unpriced-note')).toBeHidden();

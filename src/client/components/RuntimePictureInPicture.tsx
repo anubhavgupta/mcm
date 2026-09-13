@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
-import { ArrowDownLeft, PictureInPicture2 } from 'lucide-react';
+import { Activity, ArrowDownLeft, PictureInPicture2 } from 'lucide-react';
 
 declare global {
   interface Window {
@@ -11,7 +11,7 @@ declare global {
 }
 
 export function RuntimePictureInPicture({ children, notify }: {
-  children: ReactNode; notify: (message: string, error?: boolean) => void;
+  children: (control: ReactNode) => ReactNode; notify: (message: string, error?: boolean) => void;
 }) {
   const [target, setTarget] = useState<HTMLElement | null>(null);
   const [floating, setFloating] = useState(false);
@@ -54,6 +54,7 @@ export function RuntimePictureInPicture({ children, notify }: {
       const snapshot = document.createElement('div');
       snapshot.className = 'runtime-detached';
       snapshot.append(inlineContent.current.cloneNode(true));
+      snapshot.querySelector('.runtime-pip-trigger')?.remove();
       measure.append(snapshot);
       document.body.append(measure);
       let height: number;
@@ -94,15 +95,17 @@ export function RuntimePictureInPicture({ children, notify }: {
   }}>
     {floating && <div className="runtime-pip-toolbar"><strong>MCM Inference</strong><button className="button secondary" onClick={restore} aria-label="Return inference to page"><ArrowDownLeft size={14} />Return to page</button></div>}
     {floating && <p className="field-help">Floating in this tab. Native picture-in-picture is not supported by this browser.</p>}
-    {children}
+    {children(null)}
   </div>;
 
+  const label = detached ? 'Restore inference card' : 'Open inference picture-in-picture';
+  const control = <button ref={trigger} type="button" className="icon-button runtime-pip-trigger" disabled={opening}
+    onClick={() => detached ? restore() : void open()} aria-label={label} title={label}>
+    <PictureInPicture2 size={16} />
+  </button>;
   return <div className="runtime-container">
-    <button ref={trigger} className="button secondary runtime-pip-trigger" disabled={opening}
-      onClick={() => detached ? restore() : void open()} aria-label={detached ? 'Restore inference card' : 'Open inference picture-in-picture'}>
-      <PictureInPicture2 size={16} />{opening ? 'Opening...' : detached ? 'Restore inference card' : 'Picture-in-picture'}
-    </button>
-    {!detached && <div ref={inlineContent}>{children}</div>}
+    {detached ? <section className="runtime-card"><div className="runtime-heading"><h2><Activity size={16} />Inference</h2>{control}</div></section>
+      : <div ref={inlineContent}>{children(control)}</div>}
     {target && createPortal(content, target)}
     {floating && createPortal(<section className="runtime-floating" aria-label="Floating inference card">{content}</section>, document.body)}
   </div>;
