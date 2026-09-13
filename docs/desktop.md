@@ -122,8 +122,29 @@ variables when spawning inference executables, so child servers keep their own
 configured ports.
 
 The UI remains the same, including saved themes and speculative/draft settings.
-Native titlebar styling is controlled by the OS. Document Picture-in-Picture
-is not uniformly supported; MCM uses its existing in-tab inference fallback.
+Native titlebar styling is controlled by the OS.
+
+### Native always-on-top Inference window
+
+In the desktop app, the Inference card's PiP icon opens a dedicated Deno
+`BrowserWindow` with `alwaysOnTop: true`. It does not call WebView2's
+`documentPictureInPicture.requestWindow()`, avoiding the embedded WebView's
+`Internal error: no window` failure.
+
+Only the Inference card is shown: PP/TG, live input/output totals and token value.
+The window connects to the same backend's event stream; it does not create a
+second inference process or count tokens again. Main-window theme previews and
+saved changes synchronize to the Inference window.
+
+There is only one native Inference window per desktop instance. Close it normally
+or use the main card's restore icon to return the card. Closing it does not stop
+MCM; closing the main app closes the Inference window and shuts down the backend.
+The compact window is resizable, and its native titlebar is managed by the OS.
+
+Browser mode continues to use Document PiP where supported and the in-page
+floating fallback otherwise. Those browser behaviors are independent of desktop's
+native always-on-top window.
+
 Clipboard/share-sheet permissions and file-download dialogs differ between
 WebView2 and WebKitGTK. Share URLs contain portable configuration in the
 fragment, not secrets; use browser mode if a platform blocks clipboard access
@@ -141,9 +162,12 @@ and cleanup. It creates and removes its own files under `test-results/`.
 For the **actual packaged native window**, set `MCM_DESKTOP_SMOKE=1` plus a
 fresh absolute `MCM_DATA_DIR` and free `MCM_PORT`, then run the launcher in a
 graphical session. It verifies rendered React content and a same-origin API
-call from the WebView, exercises the asynchronous close handler, and exits.
+call from the WebView, exercises native Inference open/theme/reuse/close behavior,
+then checks the asynchronous main-window close handler and exits.
 It never launches inference. On headless Linux, Xvfb with the WebKitGTK runtime
-can provide the display. A failed native smoke exits unsuccessfully; it does
+can provide the display. Install and run a window manager such as Openbox inside
+Xvfb, plus `xprop` (`x11-utils` on Debian/Ubuntu), to verify the always-on-top state.
+A failed native smoke exits unsuccessfully; it does
 not fall back to the headless backend smoke.
 
 The manual **MCM desktop bundles** GitHub Actions workflow builds Windows/Linux

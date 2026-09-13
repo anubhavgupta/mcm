@@ -17,6 +17,23 @@ class FakeResponse extends EventEmitter {
 }
 
 describe('bounded SSE event delivery', () => {
+  it('initializes additional inference windows with the latest throughput even after log history rolls over', () => {
+    const events = new Events();
+    const throughput = {
+      requestId: 'one', protocol: 'openai' as const, pp: 123, tg: 45,
+      inputTokens: 8, outputTokens: 4, source: 'llama.cpp' as const, active: true,
+    };
+    events.emit({ type: 'throughput', data: throughput });
+    for (let i = 0; i < 510; i++) events.log(`line-${i}`);
+    const response = new FakeResponse();
+    events.connect(response as unknown as Response, { phase: 'ready' });
+    expect(response.text).toContain(JSON.stringify({ type: 'throughput', data: throughput }));
+    events.emit({ type: 'status', data: { phase: 'stopped' } });
+    const later = new FakeResponse();
+    events.connect(later as unknown as Response, { phase: 'stopped' });
+    expect(later.text).not.toContain('"type":"throughput"');
+    events.close();
+  });
   it('heartbeats, bounded replay, and shutdown cleanup work without retaining disconnected clients', () => {
     vi.useFakeTimers();
     try {

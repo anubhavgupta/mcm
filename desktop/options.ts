@@ -32,3 +32,9 @@ export function desktopPorts(env: Record<string, string | undefined>): number[] 
   }
   return [...new Set([port, nativePort])];
 }
+
+export function desktopNativeOrigin(env: Record<string, string | undefined>): string {
+  if (!env.DENO_SERVE_ADDRESS) throw new Error('A native DENO_SERVE_ADDRESS is required.');
+  desktopPorts(env);
+  return `http://127.0.0.1:${Number(env.DENO_SERVE_ADDRESS.split(':')[2])}`;
+}

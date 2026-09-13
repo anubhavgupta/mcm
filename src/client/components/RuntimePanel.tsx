@@ -1,15 +1,14 @@
-import { Activity, Check, CircleHelp, Copy, FileTerminal, Radio, RefreshCw, Terminal, Trash2 } from 'lucide-react';
+import { Check, CircleHelp, Copy, FileTerminal, RefreshCw, Terminal, Trash2 } from 'lucide-react';
 import type { Capabilities, LogEntry, ServerStatus, Throughput, UsageSummary } from '../../shared/types';
 import { catalog, fieldSupported } from '../../shared/config';
 import { RuntimePictureInPicture } from './RuntimePictureInPicture';
-import { UsageTotals } from './UsageTotals';
+import { InferenceCard } from './InferenceCard';
 
 export function RuntimePanel({ connected, status, throughput, usage, logs, clearLogs, notify, preview, canPreview, probe, capabilities, busy }: {
   connected: boolean; status: ServerStatus | null; throughput: Throughput | null; usage: UsageSummary | null; logs: LogEntry[];
   clearLogs: () => void; notify: (text: string, error?: boolean) => void;
   preview: () => void; canPreview: boolean; probe: () => void; capabilities: Capabilities | null; busy: boolean;
 }) {
-  const metric = (value: number | null | undefined) => value === null || value === undefined ? '—' : value.toFixed(1);
   const copyLogs = async () => {
     try {
       await navigator.clipboard.writeText(logs.map(log => `[${log.timestamp}] [${log.stream}] ${log.text}`).join('\n'));
@@ -19,15 +18,7 @@ export function RuntimePanel({ connected, status, throughput, usage, logs, clear
   const supported = capabilities ? catalog.fields.filter(field => fieldSupported(field, capabilities.flags)).length : 0;
   return <aside className="runtime-panel" aria-label="Runtime">
     <RuntimePictureInPicture notify={notify}>
-    {pipControl => <section className="runtime-card"><div className="runtime-heading"><h2><Activity size={16} />Inference</h2><div className="inference-heading-actions"><span className={`status-pill ${connected ? 'live' : ''}`}><span className="tiny-dot" />{connected ? 'LIVE' : 'OFFLINE'}</span>{pipControl}</div></div>
-      <div className="metrics-grid"><div><span>Prompt processing <abbr title="Prompt processing">PP</abbr></span><strong>{metric(throughput?.pp)}</strong><small>{throughput?.pp == null ? 'Unavailable · tokens/sec' : 'tokens/sec'}</small></div><div><span>Token generation <abbr title="Token generation">TG</abbr></span><strong>{metric(throughput?.tg)}</strong><small>{throughput?.tg == null ? 'Unavailable · tokens/sec' : 'tokens/sec'}</small></div></div>
-      <div className="metric-footnote"><Radio size={13} />{!connected ? 'Disconnected · last received values'
-        : throughput?.measurement === 'prometheus' ? 'Server metrics · Aggregate rates'
-          : throughput ? `${throughput.protocol === 'openai' ? 'OpenAI' : 'Anthropic'} · ${throughput.active ? 'Request in progress' : 'Last request'}${throughput.source === 'unavailable' ? ' · timing unavailable' : throughput.measurement === 'timings' ? ' · Request timings' : ''}`
-            : 'Waiting for an inference request'}</div>
-      {throughput && <div className="token-counts"><span>Request input <strong>{throughput.inputTokens ?? '—'}</strong></span><span>Request output <strong>{throughput.outputTokens ?? '—'}</strong></span></div>}
-      <UsageTotals usage={usage} />
-    </section>}
+      {control => <InferenceCard connected={connected} throughput={throughput} usage={usage} control={control} />}
     </RuntimePictureInPicture>
     <section className="runtime-card executable-card"><div className="runtime-heading"><h2><FileTerminal size={16} />Executable</h2></div>
       {capabilities?.version && <p className="field-help">Version: {capabilities.version}</p>}

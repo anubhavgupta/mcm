@@ -362,17 +362,22 @@ timing placeholders do not replace them. The card follows the most recently star
 inference request, rather than alternating between concurrent requests or model-list
 requests. A new inference request starts with unavailable timings until measured.
 
-Choose the **Picture-in-picture icon** in the Inference card header to move its live throughput
-and token counts into an always-on-top window. Executable controls and server logs
-stay on the main page. Close the PiP window or use **Restore inference card**
-on the main page to restore it. Keep the main MCM tab open: it owns the event
-The PiP window opens at a compact 280-pixel width, sized to the current card
-content with a 32-pixel buffer if the request input/output row has not appeared yet. Unpriced-token explanations and the session footnote stay on the main
-page. Browsers require a user gesture for subsequent window resizing; if later
-content needs more space, resize the window or reopen PiP. Keep the main MCM tab open: it owns the event
-stream. Native Document Picture-in-Picture requires a supporting browser and
-a secure context (localhost qualifies). Other browsers use a floating panel
-inside the current tab, not an always-on-top OS window.
+Choose the **Picture-in-picture icon** in the Inference card header to open its
+live throughput and token totals separately. Executable controls and server logs
+stay on the main page. Close the window or use **Restore inference card** to return.
+Unpriced-token explanations and the session footnote stay on the main page.
+
+**Desktop app:** MCM creates its own native, resizable, always-on-top Deno window.
+It uses the same backend telemetry and follows theme changes, without depending
+on the embedded WebView's Document PiP implementation. Closing the main app also
+closes this window.
+
+**Browser:** Document PiP requires a supporting browser and secure context
+(localhost qualifies). The window opens at a compact 280-pixel width, measured
+from the card plus a 32-pixel buffer if request counts have not appeared yet.
+Keep the main tab open; it owns the event stream. Resize or reopen PiP if later
+content needs more space. Unsupported browsers use an in-page floating card,
+not an OS-level always-on-top window.
 
 The default interceptor observes llama.cpp timing data and available native
 Prometheus metrics. The UI displays:

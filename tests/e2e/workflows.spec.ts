@@ -792,6 +792,103 @@ test('native inference picture-in-picture restores after closing its window', as
   } finally { await browser.close(); }
 });
 
+for (const failure of ['webview-no-window', 'not-supported']) {
+  test(`PiP falls back when the exposed API cannot create a window (${failure})`, async ({ page }) => {
+    await page.addInitScript(kind => {
+      let calls = 0;
+      Object.defineProperty(window, 'documentPictureInPicture', {
+        value: { requestWindow: () => {
+          Reflect.set(window, 'pipAttemptCount', ++calls);
+          return Promise.reject(kind === 'not-supported'
+            ? new DOMException('Document PiP is unavailable.', 'NotSupportedError')
+            : new DOMException("Failed to execute 'requestWindow' on 'DocumentPictureInPicture': Internal error: no window", 'UnknownError'));
+        } },
+      });
+    }, failure);
+    await page.goto('/');
+    const trigger = page.getByRole('button', { name: 'Open inference picture-in-picture' });
+    await trigger.click();
+    const floating = page.getByRole('region', { name: 'Floating inference card' });
+    await expect(floating).toBeVisible();
+    await expect(floating.getByRole('heading', { name: 'Inference', exact: true })).toBeVisible();
+    await expect(page.getByRole('alert')).toHaveCount(0);
+    await floating.getByRole('button', { name: 'Return inference to page' }).click();
+    await expect(floating).toHaveCount(0);
+    await trigger.click();
+    await expect(floating).toBeVisible();
+    expect(await page.evaluate(() => Reflect.get(window, 'pipAttemptCount'))).toBe(1);
+  });
+}
+
+test('desktop PiP uses the native bridge rather than the browser API', async ({ page }) => {
+  await page.addInitScript(() => {
+    let open = false;
+    window.bindings = {
+      mcmOpenInference: async options => { Reflect.set(window, 'nativeInferenceOptions', options); open = true; return { open }; },
+      mcmCloseInference: async () => { open = false; return { open }; },
+      mcmInferenceState: async () => ({ open }),
+      mcmSetInferenceTheme: async theme => { Reflect.set(window, 'nativeInferenceTheme', theme); },
+      mcmGetInferenceTheme: async () => 'light-plus',
+    };
+    for (const key of Object.keys(window.bindings) as Array<keyof typeof window.bindings>) {
+      const binding = window.bindings[key]!;
+      Object.defineProperty(binding, 'call', { get: () => { throw new Error('Native bindings do not support .call'); } });
+    }
+    Object.defineProperty(window, 'documentPictureInPicture', {
+      value: { requestWindow: () => { throw new Error('Browser PiP must not be called from native desktop.'); } },
+    });
+  });
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Open inference picture-in-picture' }).waitFor();
+  const measuredHeight = await page.evaluate(() => {
+    const measure = document.createElement('div');
+    measure.className = 'runtime-pip-document runtime-pip-measure';
+    const content = document.createElement('div');
+    content.className = 'runtime-detached';
+    content.append(document.querySelector('.runtime-container .runtime-card')!.cloneNode(true));
+    content.querySelector('.runtime-pip-trigger')?.remove();
+    measure.append(content);
+    document.body.append(measure);
+    try { return Math.ceil(content.getBoundingClientRect().height) + (content.querySelector('.token-counts') ? 0 : 32); }
+    finally { measure.remove(); }
+  });
+  await page.getByRole('button', { name: 'Open inference picture-in-picture' }).click();
+  await expect(page.getByRole('button', { name: 'Restore inference card' })).toBeVisible();
+  expect(await page.evaluate(() => Reflect.get(window, 'nativeInferenceOptions'))).toMatchObject({ width: 280, height: measuredHeight + 40, theme: 'light-plus' });
+  await expect(page.getByRole('region', { name: 'Floating inference card' })).toHaveCount(0);
+  await expect(page.getByRole('alert')).toHaveCount(0);
+  await page.evaluate(() => { document.documentElement.dataset.theme = 'dracula'; });
+  await expect.poll(() => page.evaluate(() => Reflect.get(window, 'nativeInferenceTheme'))).toBe('dracula');
+  await page.getByRole('button', { name: 'Restore inference card' }).click();
+  await expect(page.getByRole('button', { name: 'Open inference picture-in-picture' })).toBeVisible();
+  await page.getByRole('button', { name: 'Open inference picture-in-picture' }).click();
+  await page.evaluate(() => window.dispatchEvent(new CustomEvent('mcm-inference-state', { detail: { open: false } })));
+  await expect(page.getByRole('button', { name: 'Open inference picture-in-picture' })).toBeVisible();
+});
+
+test('standalone native inference page displays live telemetry and native theme changes only', async ({ page, request }) => {
+  await page.addInitScript(() => {
+    const getTheme = async () => 'dracula' as const;
+    Object.defineProperty(getTheme, 'call', { get: () => { throw new Error('Native bindings do not support .call'); } });
+    window.bindings = { mcmGetInferenceTheme: getTheme };
+  });
+  const launch = await request.post('/api/launch', { data: { modelId: 'tiny' } });
+  expect(launch.ok()).toBe(true);
+  await expect.poll(async () => (await bootstrap(request)).status.phase).toBe('ready');
+  await request.post('/v1/chat/completions', { data: { messages: [{ role: 'user', content: 'Hello' }], stream: true } });
+  await page.goto('/inference');
+  await expect(page.getByRole('heading', { name: 'Inference', exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Executable', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('log')).toHaveCount(0);
+  await expect(page.getByRole('complementary', { name: 'Workspace navigation' })).toHaveCount(0);
+  await expect(page.getByText('32.5', { exact: true })).toBeVisible();
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'dracula');
+  await page.evaluate(() => window.dispatchEvent(new CustomEvent('mcm-inference-theme', { detail: { theme: 'nord' } })));
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'nord');
+  await expect(page.getByRole('region', { name: 'All-time usage' })).toBeVisible();
+  await expect(page.locator('.usage-summary-note')).toBeHidden();
+});
+
 test('picture-in-picture rejection leaves runtime on the page', async ({ page }) => {
   await page.addInitScript(() => Object.defineProperty(window, 'documentPictureInPicture', {
     value: { requestWindow: () => Promise.reject(new Error('Permission denied')) },

@@ -1,7 +1,8 @@
 import type { Response } from 'express';
-import type { ManagerEvent, ServerStatus, UsageSummary } from '../shared/types';
+import type { ManagerEvent, ServerStatus, Throughput, UsageSummary } from '../shared/types';
 
 export class Events {
+  private latestThroughput?: Throughput;
   private sequence = 0;
   private history: { id: number; event: ManagerEvent }[] = [];
   private clients = new Set<Response>();
@@ -9,6 +10,8 @@ export class Events {
   constructor(private redact: (text: string) => string = text => text) {}
   emit(event: ManagerEvent): void {
     const safe = JSON.parse(JSON.stringify(event), (_key, value: unknown) => typeof value === 'string' ? this.redact(value) : value) as ManagerEvent;
+    if (safe.type === 'throughput') this.latestThroughput = safe.data;
+    if (safe.type === 'status' && (safe.data.phase === 'starting' || safe.data.phase === 'stopped')) this.latestThroughput = undefined;
     const entry = { id: ++this.sequence, event: safe };
     this.history.push(entry);
     if (this.history.length > 500) this.history.shift();
@@ -29,6 +32,7 @@ export class Events {
       if (cursor !== undefined ? entry.id > cursor : entry.event.type === 'log') this.write(response, entry.id, entry.event);
     }
     response.write(`data: ${JSON.stringify({ type: 'status', data: status })}\n\n`);
+    if (this.latestThroughput) response.write(`data: ${JSON.stringify({ type: 'throughput', data: this.latestThroughput })}\n\n`);
     if (usage) response.write(`data: ${JSON.stringify({ type: 'usage', data: usage })}\n\n`);
     this.clients.add(response);
     const timer = setInterval(() => {

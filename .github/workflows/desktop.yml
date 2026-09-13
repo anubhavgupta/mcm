@@ -28,8 +28,13 @@ jobs:
       - if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-0 xvfb
-          LIBGL_ALWAYS_SOFTWARE=1 MCM_DESKTOP_SMOKE=1 MCM_DATA_DIR="$PWD/test-results/native-window" MCM_PORT=19838 xvfb-run -a dist/desktop/linux/MCM/MCM
+          sudo apt-get install -y libwebkit2gtk-4.1-0 xvfb openbox x11-utils
+          LIBGL_ALWAYS_SOFTWARE=1 MCM_DESKTOP_SMOKE=1 MCM_DATA_DIR="$PWD/test-results/native-window" MCM_PORT=19838 xvfb-run -a bash -c '
+            openbox >/tmp/mcm-openbox.log 2>&1 &
+            wm_pid=$!
+            trap "kill $wm_pid" EXIT
+            dist/desktop/linux/MCM/MCM
+          '
       - uses: actions/upload-artifact@v4
         with:
           name: MCM-${{ matrix.platform }}-x86_64
