@@ -5,7 +5,7 @@ import { decodeWorkspace } from '../shared/sharing';
 import { api, errorMessage, jsonBody } from './api';
 import { useManager } from './hooks/useManager';
 import { useUnsavedWarning } from './hooks/useUnsavedWarning';
-import { ConfigEditor } from './components/ConfigEditor';
+import { ConfigEditor, type ExecutableEdit } from './components/ConfigEditor';
 import { Dialog } from './components/Dialog';
 import { ImportDialog } from './components/ImportDialog';
 import { MetadataDialog, type MetadataTarget } from './components/MetadataDialog';
@@ -108,10 +108,25 @@ export default function App() {
   const activeModel = workspace.models.find(model => model.id === manager.status?.modelId);
 
   const openCreate = (kind: 'model' | 'group') => guard(() => { setMobileNav(false); setModal({ kind: 'metadata', target: { kind } }); });
-  const saveValues = async (values: Values) => run('save', async () => {
-    const next: Workspace = selection.kind === 'base' ? { ...workspace, base: values }
-      : selection.kind === 'group' ? { ...workspace, groups: workspace.groups.map(item => item.id === selection.id ? { ...item, values } : item) }
-        : { ...workspace, models: workspace.models.map(item => item.id === selection.id ? { ...item, values } : item) };
+  const saveValues = async (values: Values, executable: ExecutableEdit) => run('save', async () => {
+    const overrides = structuredClone(settings.executableOverrides ?? {});
+    if (selection.kind === 'base') {
+      if (executable.override) overrides.base = executable.path;
+      else delete overrides.base;
+    } else {
+      const field = selection.kind === 'group' ? 'groups' : 'models';
+      const entries = executable.override ? { ...overrides[field], [selection.id]: executable.path } : { ...overrides[field] };
+      if (!executable.override) delete entries[selection.id];
+      overrides[field] = entries;
+    }
+    if (JSON.stringify(overrides) !== JSON.stringify(settings.executableOverrides ?? {})) {
+      manager.setSettings(await api<PublicSettings>('/settings', { method: 'PUT', body: JSON.stringify({ executableOverrides: overrides }) }));
+      setCapabilities(null);
+    }
+    const version = executable.version ? { llamaVersion: executable.version } : {};
+    const next: Workspace = selection.kind === 'base' ? { ...workspace, base: values, ...version }
+      : selection.kind === 'group' ? { ...workspace, groups: workspace.groups.map(item => item.id === selection.id ? { ...item, values, ...version } : item) }
+        : { ...workspace, models: workspace.models.map(item => item.id === selection.id ? { ...item, values, ...version } : item) };
     await persist(next);
     notify('Configuration saved.');
   });
@@ -130,7 +145,7 @@ export default function App() {
 
   return <FeedbackContext.Provider value={{ notice, dismiss: () => setNotice(null) }}><div className={`app-shell ${collapsed ? 'nav-collapsed' : ''}`}>
     <a className="skip-link" href="#main-content">Skip to configuration</a>
-    <Sidebar workspace={workspace} selection={selection} select={value => guard(() => { setSelection(value); setEditorVersion(version => version + 1); setMobileNav(false); window.scrollTo({ top: 0 }); })}
+    <Sidebar workspace={workspace} selection={selection} select={value => guard(() => { setSelection(value); setCapabilities(null); setEditorVersion(version => version + 1); setMobileNav(false); window.scrollTo({ top: 0 }); })}
       open={mobileNav} close={() => setMobileNav(false)} collapsed={collapsed} toggleCollapsed={() => setCollapsed(value => !value)}
       create={openCreate} settings={() => guard(() => { setMobileNav(false); setModal({ kind: 'settings' }); })}
       share={() => guard(() => { setMobileNav(false); setModal({ kind: 'share' }); })} />
@@ -150,9 +165,9 @@ export default function App() {
         </section>
         {selectedModel && <div className="model-identity"><Box size={15} /><code>{selectedModel.model.filename}</code>{selectedModel.model.repo && <span>{selectedModel.model.repo}</span>}<span className="identity-parent">Inherits from {group?.name ?? 'Base'}</span></div>}
         {!workspace.models.length && <section className="welcome-card"><div className="welcome-icon"><Box size={23} /></div><div><h2>A good model deserves a great setup.</h2><p>Start with your base defaults, then add your first model. Share the same setup anywhere.</p></div><button className="button secondary" onClick={() => openCreate('model')}><Plus size={15} />Create your first model<ArrowRight size={14} /></button></section>}
-        <div className="content-grid"><ConfigEditor key={`${selection.kind}-${selection.kind === 'base' ? '' : selection.id}-${editorVersion}`} workspace={workspace} selection={selection} capabilities={capabilities} onDirty={setDirty} onSave={saveValues} busy={!!busy} />
+        <div className="content-grid">        <ConfigEditor key={`${selection.kind}-${selection.kind === 'base' ? '' : selection.id}-${editorVersion}`} workspace={workspace} settings={settings} selection={selection} capabilities={capabilities} onDirty={setDirty} onSave={saveValues} busy={!!busy} />
           <RuntimePanel connected={manager.connected} status={manager.status} throughput={manager.throughput} usage={manager.usage} logs={manager.logs} clearLogs={manager.clearLogs} notify={notify} preview={preview} canPreview={!!selectedModel} capabilities={capabilities} busy={!!busy}
-            probe={() => guard(() => void run('probe', async () => { setCapabilities(await api<Capabilities>('/capabilities', jsonBody({}))); notify('Executable capabilities refreshed.'); }))} />
+            probe={() => guard(() => void run('probe', async () => { setCapabilities(await api<Capabilities>('/capabilities', jsonBody({ scope: selection }))); notify('Executable capabilities refreshed.'); }))} />
         </div>
         <footer className="page-footer"><span>MCM — a little more control.</span><span>Built for llama.cpp <span aria-hidden="true">↗</span></span></footer>
       </main>
@@ -161,10 +176,13 @@ export default function App() {
     {modal?.kind === 'metadata' && <MetadataDialog target={modal.target} workspace={workspace} busy={!!busy} onClose={closeModal} onSave={async (target, values) => run('metadata', async () => {
       const id = target.item?.id ?? crypto.randomUUID();
       if (target.kind === 'group') {
-        const item = { id, name: values.name.trim(), values: target.item?.values ?? {} };
+        const item = { id, name: values.name.trim(), values: target.item?.values ?? {},
+          ...(target.item?.llamaVersion ? { llamaVersion: target.item.llamaVersion } : {}),
+        };
         await persist({ ...workspace, groups: target.item ? workspace.groups.map(group => group.id === id ? item : group) : [...workspace.groups, item] });
       } else {
         const item = { id, name: values.name.trim(), model: { filename: values.filename, ...(values.repo ? { repo: values.repo } : {}) }, ...(values.groupId ? { groupId: values.groupId } : {}), values: target.item?.values ?? {},
+          ...(target.item?.llamaVersion ? { llamaVersion: target.item.llamaVersion } : {}),
         };
         await persist({ ...workspace, models: target.item ? workspace.models.map(model => model.id === id ? item : model) : [...workspace.models, item] });
       }
@@ -181,11 +199,14 @@ export default function App() {
         }) };
       await persist(next); setSelection({ kind: 'base' }); setModal(null); notify(`${target.kind === 'model' ? 'Model' : 'Group'} deleted.`);
     })} />}
-    {modal?.kind === 'settings' && <SettingsDialog settings={settings} workspace={workspace} busy={!!busy} onClose={closeModal} onSave={async values => run('settings', async () => {
+    {modal?.kind === 'settings' && <SettingsDialog settings={settings} workspace={workspace} busy={!!busy} onClose={closeModal} onSave={async (values, version) => run('settings', async () => {
       const bindings = Object.fromEntries(Object.entries(values.modelBindings).filter(([, value]) => value !== ''));
       const draftBindings = Object.fromEntries(Object.entries(values.draftModelBindings ?? {}).filter(([, value]) => value !== ''));
       const result = await api<PublicSettings>('/settings', { method: 'PUT', body: JSON.stringify({ ...values, modelBindings: bindings, draftModelBindings: draftBindings }) });
-      manager.setSettings(result); setCapabilities(null); setModal(null); notify('Machine settings saved. Running processes are unchanged until restart.');
+      manager.setSettings(result);
+      if (version && !workspace.llamaVersion) await persist({ ...workspace, llamaVersion: version.version });
+      setEditorVersion(current => current + 1);
+      setCapabilities(null); setModal(null); notify('Machine settings saved. Running processes are unchanged until restart.');
     })} />}
     {modal?.kind === 'share' && <ShareDialog workspace={workspace} selectedModelId={selectedModel?.id} repo={settings.hfRepo} onClose={closeModal} notify={notify} onImport={(incoming, source) => setModal({ kind: 'import', workspace: incoming, source })} />}
     {modal?.kind === 'import' && <ImportDialog workspace={modal.workspace} current={workspace} source={modal.source} busy={!!busy} onClose={closeModal} onImport={() => void run('import', async () => {

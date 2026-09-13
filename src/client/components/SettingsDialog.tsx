@@ -1,16 +1,18 @@
+import { useState } from 'react';
 import { useForm, useWatch } from 'react-hook-form';
 import { FolderSearch, LockKeyhole, RefreshCw, Save } from 'lucide-react';
 import { repoSchema, resolveConfig } from '../../shared/config';
-import type { LocalSettings, PublicSettings, Workspace } from '../../shared/types';
+import type { ExecutableVersion, LocalSettings, PublicSettings, Workspace } from '../../shared/types';
 import { Dialog } from './Dialog';
 import { useUnsavedWarning } from '../hooks/useUnsavedWarning';
 import { useModelFiles } from '../hooks/useModelFiles';
+import { ExecutableVersionCheck } from './ExecutableVersionCheck';
 
 interface SettingsValues extends LocalSettings { clearHfToken: boolean }
 
 export function SettingsDialog({ settings, workspace, onClose, onSave, busy }: {
   settings: PublicSettings; workspace: Workspace; onClose: () => void;
-  onSave: (values: SettingsValues) => Promise<void>; busy: boolean;
+  onSave: (values: SettingsValues, version?: ExecutableVersion) => Promise<void>; busy: boolean;
 }) {
   const form = useForm<SettingsValues>({
     defaultValues: {
@@ -23,6 +25,8 @@ export function SettingsDialog({ settings, workspace, onClose, onSave, busy }: {
   });
   useUnsavedWarning(form.formState.isDirty);
   const clearToken = useWatch({ control: form.control, name: 'clearHfToken' });
+  const executablePath = useWatch({ control: form.control, name: 'executablePath' });
+  const [checkedVersion, setCheckedVersion] = useState<ExecutableVersion | undefined>();
   const { files, discovery, refresh: loadModels } = useModelFiles();
   const bindings = useWatch({ control: form.control, name: 'modelBindings' });
   const draftBindings = useWatch({ control: form.control, name: 'draftModelBindings' });
@@ -30,9 +34,11 @@ export function SettingsDialog({ settings, workspace, onClose, onSave, busy }: {
     if (!busy && (!form.formState.isDirty || window.confirm('Discard unsaved machine settings?'))) onClose();
   };
   return <Dialog title="Machine settings" subtitle="Local to this machine. Never included in a shared workspace." onClose={close} wide>
-    <form className="dialog-form" onSubmit={form.handleSubmit(onSave)} noValidate>
+    <form className="dialog-form" onSubmit={form.handleSubmit(values => onSave(values, checkedVersion?.executablePath === values.executablePath ? checkedVersion : undefined))} noValidate>
       <div className="settings-form-grid">
-        <div className="form-field full-width"><label htmlFor="executable-path">llama-server executable path</label><input id="executable-path" placeholder="/path/to/llama-server" {...form.register('executablePath')} /><p className="field-help">The server executable, not the containing folder. Changes apply on the next launch.</p></div>
+        <div className="form-field full-width"><label htmlFor="executable-path">llama-server executable path</label><input id="executable-path" placeholder="/path/to/llama-server" {...form.register('executablePath')} /><p className="field-help">The machine default. Base, Group and Model can override it locally. Check version runs this path before saving. Changes apply on the next launch.</p>
+          <ExecutableVersionCheck path={executablePath} expected={workspace.llamaVersion} disabled={busy} onChecked={setCheckedVersion} />
+        </div>
         <div className="form-field full-width"><label htmlFor="models-directory">Models directory</label><input id="models-directory" placeholder="/path/to/models" {...form.register('modelsDirectory')} /><p className="field-help">Save this directory before refreshing discovered files.</p></div>
         <div className="form-field"><label htmlFor="server-port">Server port</label><input id="server-port" type="number" {...form.register('serverPort', { valueAsNumber: true, min: { value: 1, message: 'Use a port between 1 and 65535.' }, max: { value: 65535, message: 'Use a port between 1 and 65535.' }, validate: value => Number.isInteger(value) || 'Enter a whole-number port.' })} aria-invalid={!!form.formState.errors.serverPort} />
           {form.formState.errors.serverPort && <p role="alert" className="field-error">{form.formState.errors.serverPort.message}</p>}</div>

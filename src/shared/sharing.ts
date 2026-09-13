@@ -9,6 +9,7 @@ export function modelWorkspace(workspace: Workspace, modelId: string): Workspace
   return workspaceSchema.parse({
     version: workspace.version,
     base: workspace.base,
+    ...(workspace.llamaVersion ? { llamaVersion: workspace.llamaVersion } : {}),
     ...(workspace.basePricing ? { basePricing: workspace.basePricing } : {}),
     groups: workspace.groups.filter(group => group.id === model.groupId),
     models: [model],

@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createServer, request as httpRequest, type Server, type RequestListener } from 'node:http';
 import { randomUUID } from 'node:crypto';
 import { join, resolve } from 'node:path';
-import { mkdir, rm } from 'node:fs/promises';
+import { chmod, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { once } from 'node:events';
 import type { AddressInfo } from 'node:net';
 import { createApp } from './app';
@@ -37,6 +37,83 @@ afterEach(async () => {
 });
 
 describe('management API validation and privacy', () => {
+  async function versionFixture(version: string): Promise<string> {
+    const path = join(directory, `binary-${randomUUID()}.mjs`);
+    await writeFile(path, `#!${process.execPath}\nconsole.log(process.argv.includes('--version') ? ${JSON.stringify(`version: ${version}`)} : '--model --host --port --threads');`);
+    await chmod(path, 0o700);
+    return path;
+  }
+  it('probes an unsaved executable without changing settings or workspace', async () => {
+    const base = await app();
+    const path = await versionFixture('12345 (abcdef)');
+    await runtime!.store.saveSettings({ executablePath: '/saved/path', executableOverrides: { base: '/other/path' } });
+    const settingsBefore = await readFile(join(directory, 'settings.json'), 'utf8');
+    const workspaceBefore = await readFile(join(directory, 'workspace.json'), 'utf8');
+    const response = await fetch(`${base}/api/version`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ executablePath: path }),
+    });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ executablePath: path, version: '12345 (abcdef)' });
+    expect(await readFile(join(directory, 'settings.json'), 'utf8')).toBe(settingsBefore);
+    expect(await readFile(join(directory, 'workspace.json'), 'utf8')).toBe(workspaceBefore);
+    for (const body of [{}, { executablePath: 'relative' }, { executablePath: '' }, { executablePath: '/bad\npath' },
+      { executablePath: '/bad\x7fpath' }, { executablePath: '/'.repeat(4097) }, { executablePath: path, extra: true },
+      { executablePath: join(directory, 'missing') }]) {
+      const invalid = await fetch(`${base}/api/version`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+      });
+      expect(invalid.status).toBe(400);
+      expect(await invalid.json()).toHaveProperty('error');
+    }
+  });
+  it('probes the effective executable and expected version for each selected scope', async () => {
+    const base = await app();
+    const basePath = await versionFixture('1');
+    const groupPath = await versionFixture('2');
+    const modelPath = await versionFixture('3');
+    await runtime!.store.saveWorkspace({
+      ...emptyWorkspace(), llamaVersion: '1',
+      groups: [{ id: 'group', name: 'Group', values: {}, llamaVersion: '2' }],
+      models: [{ id: 'model', name: 'Model', groupId: 'group', model: { filename: 'model.gguf' }, values: {}, llamaVersion: '99' }],
+    });
+    await runtime!.store.saveSettings({ executablePath: '/missing', executableOverrides: { base: basePath, groups: { group: groupPath }, models: { model: modelPath } } });
+    for (const [scope, version] of [[undefined, '1'], [{ kind: 'base' }, '1'], [{ kind: 'group', id: 'group' }, '2'], [{ kind: 'model', id: 'model' }, '3']] as const) {
+      const response = await fetch(`${base}/api/capabilities`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: scope ? JSON.stringify({ scope }) : undefined,
+      });
+      expect(response.status).toBe(200);
+      const result = await response.json();
+      expect(result.version).toBe(version);
+      expect(result.flags).toContain('--threads');
+      if (version === '3') expect(result.compatibilityWarning).toContain('99');
+      else expect(result.compatibilityWarning).toBeUndefined();
+    }
+    for (const kind of ['model', 'group']) {
+      expect((await fetch(`${base}/api/capabilities`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ scope: { kind, id: 'missing' } }),
+      })).status).toBe(404);
+    }
+    for (const scope of [{ kind: 'machine' }, { kind: 'base', id: 'unexpected' }, { kind: 'model' }]) {
+      expect((await fetch(`${base}/api/capabilities`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ scope }),
+      })).status).toBe(400);
+    }
+  });
+  it('applies management host and origin guards to version execution', async () => {
+    const base = await app();
+    for (const headers of [{ Origin: 'https://attacker.example' }, { 'Sec-Fetch-Site': 'cross-site' }] as Record<string, string>[]) {
+      expect((await fetch(`${base}/api/version`, { method: 'POST', headers })).status).toBe(403);
+    }
+    const status = await new Promise<number | undefined>((resolve, reject) => {
+      const request = httpRequest(`${base}/api/version`, { method: 'POST', headers: { Host: 'remote.example' } }, response => {
+        response.resume();
+        resolve(response.statusCode);
+      });
+      request.once('error', reject);
+      request.end();
+    });
+    expect(status).toBe(403);
+  });
   it('validates input consistently, saves workspace and never exposes tokens', async () => {
     const base = await app();
     let response = await fetch(`${base}/api/settings`, {

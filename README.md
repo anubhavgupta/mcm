@@ -32,7 +32,9 @@ is not the type checker.
 
 ## First launch
 
-1. Open **Machine settings** and enter the executable path and local models directory.
+1. Open **Machine settings**, enter the executable path, and press **Check version**.
+   MCM runs that path with `--version` and displays its version before you save.
+   Enter the local models directory as well.
 2. Set the llama-server port. This is separate from MCM's HTTP port.
 3. Add a model configuration by selecting a discovered GGUF model from the
    dropdown. Its configuration name is filled automatically and can be customized.
@@ -53,6 +55,33 @@ the executable's own default to apply. An unprobed command preview shows the
 intended settings before this capability filtering.
 
 ## Configuration hierarchy
+
+### Executable paths and version expectations
+
+Each Base, Group and Model configuration has a **Server executable** card.
+Use its **Override / Reset** controls to choose an executable for that scope:
+
+```text
+Model executable > Group executable > Base executable > Machine Settings default
+```
+
+Executable overrides are stored in machine settings, not portable configurations.
+They apply consistently to capability probing, command preview, launch and restart.
+Changing a saved path does not replace an already-running process until restart.
+
+**Check version** works with the currently entered path, including unsaved edits.
+It does not save the path or start an inference server. Save the configuration to
+record the checked version as portable `llamaVersion` metadata for that scope.
+When saving a checked Machine Settings default, MCM records the base expectation
+if the workspace does not already have one.
+
+Shared configurations include version expectations but no local executable paths.
+Version checks and launch compare the effective expected version against the local
+executable and show a compatibility warning on mismatch. A mismatch alone does not
+block launch or rewrite the imported version. It warns that flags or supported
+values may differ; it is not a guarantee of incompatibility or compatibility.
+
+### Model settings
 
 ```text
 Catalog defaults < Base configuration < Optional group < Model overrides

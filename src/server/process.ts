@@ -6,7 +6,8 @@ import { isAbsolute } from 'node:path';
 import { createServer } from 'node:net';
 import { setTimeout as delay } from 'node:timers/promises';
 import { buildArgs, catalog, fieldSupported, isFieldEnabled, parseHelp, resolveConfig } from '../shared/config';
-import type { Capabilities, LocalSettings, ServerStatus, Values } from '../shared/types';
+import { expectedLlamaVersion, resolveExecutable, versionWarning } from '../shared/executable';
+import type { Capabilities, ExecutableScope, ExecutableVersion, LocalSettings, ServerStatus, Values, Workspace } from '../shared/types';
 import { ApiError, messageOf } from './errors';
 import { Events } from './events';
 import { resolveModel } from './models';
@@ -14,6 +15,7 @@ import { Store } from './storage';
 
 export interface ProcessOptions {
   helpTimeoutMs?: number;
+  versionTimeoutMs?: number;
   stopTimeoutMs?: number;
   readyTimeoutMs?: number;
   healthIntervalMs?: number;
@@ -44,11 +46,11 @@ async function ensurePortAvailable(port: number): Promise<void> {
   });
 }
 
-export async function discoverCapabilities(settings: LocalSettings, timeoutMs = 5000): Promise<Capabilities> {
+async function probeExecutable(settings: LocalSettings, argument: '--help' | '--version', timeoutMs: number): Promise<string> {
   const path = await executable(settings);
   return new Promise((resolve, reject) => {
-    const child = spawn(path, ['--help'], { stdio: ['ignore', 'pipe', 'pipe'], env: childEnvironment(settings) });
-    const chunks: Buffer[] = [];
+    const child = spawn(path, [argument], { stdio: ['ignore', 'pipe', 'pipe'], env: childEnvironment(settings) });
+    const output: Buffer[][] = [[], []];
     let size = 0;
     let failure: Error | undefined;
     const fail = (message: string): void => {
@@ -57,24 +59,54 @@ export async function discoverCapabilities(settings: LocalSettings, timeoutMs = 
       child.stdout.destroy();
       child.stderr.destroy();
     };
-    const timer = setTimeout(() => fail('Executable --help timed out. Verify this is a compatible llama-server binary.'), timeoutMs);
-    const collect = (chunk: Buffer): void => {
+    const timer = setTimeout(() => fail(`Executable ${argument} timed out. Verify this is a compatible llama-server binary.`), timeoutMs);
+    const collect = (chunks: Buffer[], chunk: Buffer): void => {
       size += chunk.length;
-      if (size > 1024 * 1024) fail('Executable --help exceeded the 1 MiB output limit.');
+      if (size > 1024 * 1024) fail(`Executable ${argument} exceeded the 1 MiB output limit.`);
       else chunks.push(chunk);
     };
-    child.stdout.on('data', collect);
-    child.stderr.on('data', collect);
+    child.stdout.on('data', (chunk: Buffer) => collect(output[0]!, chunk));
+    child.stderr.on('data', (chunk: Buffer) => collect(output[1]!, chunk));
     child.once('error', () => { failure = new ApiError(400, 'Cannot run the configured executable.'); });
     child.once('close', code => {
       clearTimeout(timer);
       if (failure) { reject(failure); return; }
-      if (code !== 0) { reject(new ApiError(400, `Executable --help exited with code ${code}.`)); return; }
-      const raw = Buffer.concat(chunks).toString('utf8');
-      const help = settings.hfToken ? raw.split(settings.hfToken).join('[REDACTED]') : raw;
-      resolve({ help, flags: parseHelp(help) });
+      if (code !== 0) { reject(new ApiError(400, `Executable ${argument} exited with code ${code}. Verify this is a compatible llama-server binary.`)); return; }
+      const raw = output.map(chunks => Buffer.concat(chunks).toString('utf8')).join('\n');
+      resolve(settings.hfToken ? raw.split(settings.hfToken).join('[REDACTED]') : raw);
     });
   });
+}
+
+export async function discoverVersion(settings: LocalSettings, timeoutMs = 5000): Promise<ExecutableVersion> {
+  const output = await probeExecutable(settings, '--version', timeoutMs);
+  for (const line of output.split(/\r?\n/)) {
+    // Only publish the build identifier and optional commit, never arbitrary build diagnostics.
+    const match = /^[ \t]*(?:llama\.cpp[ \t]+)?version:[ \t]*(b?\d+(?:\.\d+){0,3})(?=$|[ \t(])(?:[ \t]*\(([a-f0-9]{6,40})\))?/i.exec(line);
+    if (!match) continue;
+    const version = `${match[1]}${match[2] ? ` (${match[2]})` : ''}`;
+    if (version.length <= 256) return { executablePath: settings.executablePath, version };
+  }
+  throw new ApiError(400, 'Executable --version did not report a recognized llama.cpp version. Select a llama-server binary that reports "version: BUILD (COMMIT)".');
+}
+
+export async function discoverCapabilities(settings: LocalSettings, timeoutMs = 5000, expectedVersion?: string, versionTimeoutMs = timeoutMs): Promise<Capabilities> {
+  const help = await probeExecutable(settings, '--help', timeoutMs);
+  const capabilities: Capabilities = { help, flags: parseHelp(help) };
+  try {
+    capabilities.version = (await discoverVersion(settings, versionTimeoutMs)).version;
+    capabilities.compatibilityWarning = versionWarning(expectedVersion, capabilities.version);
+  } catch (error) {
+    capabilities.compatibilityWarning = `Could not verify executable version. ${messageOf(error)}`;
+  }
+  return capabilities;
+}
+
+export function scopedSettings(settings: LocalSettings, workspace: Workspace, scope: ExecutableScope): LocalSettings {
+  if (scope.kind !== 'base' && !workspace[scope.kind === 'model' ? 'models' : 'groups'].some(item => item.id === scope.id)) {
+    throw new ApiError(404, `${scope.kind === 'model' ? 'Model' : 'Group'} configuration not found.`);
+  }
+  return { ...settings, executablePath: resolveExecutable(settings, workspace, scope) };
 }
 
 interface RunningChild {
@@ -82,6 +114,7 @@ interface RunningChild {
   exited: Promise<void>;
   controller: AbortController;
   port: number;
+  compatibilityWarning?: string;
 }
 
 export class ProcessManager {
@@ -105,6 +138,7 @@ export class ProcessManager {
   async preview(modelId: string, capabilities?: Capabilities, settings = this.store.getSettings(), workspace = this.store.getWorkspace()): Promise<{ executable: string; args: string[] }> {
     const model = workspace.models.find(item => item.id === modelId);
     if (!model) throw new ApiError(404, 'Model configuration not found.');
+    settings = scopedSettings(settings, workspace, { kind: 'model', id: modelId });
     const path = await executable(settings);
     const modelPath = await resolveModel(settings, model);
     const values = resolveConfig(workspace, model);
@@ -152,15 +186,17 @@ export class ProcessManager {
     });
   }
   private async start(modelId: string): Promise<ServerStatus> {
-    const settings = this.store.getSettings();
     const workspace = this.store.getWorkspace();
-    const capabilities = await discoverCapabilities(settings, this.options.helpTimeoutMs);
+    const scope = { kind: 'model' as const, id: modelId };
+    const settings = scopedSettings(this.store.getSettings(), workspace, scope);
+    const capabilities = await discoverCapabilities(settings, this.options.helpTimeoutMs, expectedLlamaVersion(workspace, scope), this.options.versionTimeoutMs);
+    const compatibilityWarning = capabilities.compatibilityWarning;
     const command = await this.preview(modelId, capabilities, settings, workspace);
     await ensurePortAvailable(settings.serverPort);
     const child = spawn(command.executable, command.args, { stdio: ['ignore', 'pipe', 'pipe'], env: childEnvironment(settings) });
     const controller = new AbortController();
     const exited = new Promise<void>(resolve => child.once('close', () => resolve()));
-    const running = { child, exited, controller, port: settings.serverPort };
+    const running = { child, exited, controller, port: settings.serverPort, compatibilityWarning };
     this.running = running;
     this.lastModelId = modelId;
     for (const [stream, readable] of [['stdout', child.stdout], ['stderr', child.stderr]] as const) {
@@ -181,17 +217,18 @@ export class ProcessManager {
       readable!.on('end', () => { pending += decoder.end(); flush(true); });
     }
     child.once('error', error => {
-      if (this.running === running) this.setStatus({ phase: 'failed', modelId, error: this.store.redact(messageOf(error)) });
+      if (this.running === running) this.setStatus({ phase: 'failed', modelId, compatibilityWarning, error: this.store.redact(messageOf(error)) });
     });
     child.once('close', (code, signal) => {
       controller.abort();
       if (this.running !== running) return;
       this.running = undefined;
       if (this.status.phase !== 'stopping' && this.status.phase !== 'failed') {
-        this.setStatus({ phase: 'failed', modelId, error: `llama-server exited (${signal ?? code}). Inspect server logs.` });
+        this.setStatus({ phase: 'failed', modelId, compatibilityWarning, error: `llama-server exited (${signal ?? code}). Inspect server logs.` });
       }
     });
-    this.setStatus({ phase: 'starting', modelId, pid: child.pid });
+    this.setStatus({ phase: 'starting', modelId, pid: child.pid, compatibilityWarning });
+    if (compatibilityWarning) this.events.log(compatibilityWarning);
     this.events.log(`Starting model ${modelId}; waiting for llama-server /health.`);
     void this.waitReady(running, settings.serverPort, modelId);
     return this.getStatus();
@@ -208,7 +245,7 @@ export class ProcessManager {
         const healthy = response.ok;
         await response.body?.cancel();
         if (healthy && this.running === running && !running.controller.signal.aborted) {
-          this.setStatus({ phase: 'ready', modelId, pid: running.child.pid });
+          this.setStatus({ phase: 'ready', modelId, pid: running.child.pid, compatibilityWarning: running.compatibilityWarning });
           this.events.log('llama-server is ready.');
           return;
         }
@@ -216,7 +253,7 @@ export class ProcessManager {
       await delay(this.options.healthIntervalMs ?? 300, undefined, { signal: running.controller.signal }).catch(() => {});
     }
     if (this.running === running && !running.controller.signal.aborted) {
-      this.setStatus({ phase: 'failed', modelId, error: 'llama-server did not become healthy before the readiness timeout. Inspect logs and model settings.' });
+      this.setStatus({ phase: 'failed', modelId, compatibilityWarning: running.compatibilityWarning, error: 'llama-server did not become healthy before the readiness timeout. Inspect logs and model settings.' });
       await this.serialize(async () => {
         if (this.running === running) await this.terminate(running);
       });

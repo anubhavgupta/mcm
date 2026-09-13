@@ -6,6 +6,25 @@ argument generation and share encoding live in `src/shared`.
 
 ## Management endpoints
 
+- `POST /api/version`, `{ "executablePath": "/absolute/path/to/llama-server" }`
+  runs a bounded `--version` probe and returns `{ executablePath, version }`.
+  The supplied path may be an unsaved form value; this operation does not save it.
+- `POST /api/capabilities` accepts optional `{ scope: { kind: "base" } }`,
+  `{ scope: { kind: "group", id } }`, or `{ scope: { kind: "model", id } }`.
+  It resolves that scope's machine-local executable and returns supported flags,
+  help, and available version/compatibility warning information.
+
+`settings.executableOverrides` optionally contains `base`, `groups`, and `models`.
+`base` is a path string; `groups`/`models` map configuration IDs to path strings.
+Model > Group > Base > `settings.executablePath` determines the selected executable.
+Removing the corresponding override restores inheritance.
+
+Portable `llamaVersion` metadata can be attached to the workspace (base),
+individual groups, and models. Expectations inherit model > group > base and are
+compared to the local executable. `Capabilities.compatibilityWarning` and
+`ServerStatus.compatibilityWarning` expose non-blocking version warnings.
+All path overrides remain outside workspace exports and deep-links.
+
 Machine settings accept optional `anthropicMode: "passthrough" | "openai"`.
 Absent values retain passthrough behavior. With `"openai"`, only
 `POST /v1/messages` is translated to upstream `/v1/chat/completions`; the client

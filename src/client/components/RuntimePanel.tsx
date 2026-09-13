@@ -30,6 +30,8 @@ export function RuntimePanel({ connected, status, throughput, usage, logs, clear
     </section>}
     </RuntimePictureInPicture>
     <section className="runtime-card executable-card"><div className="runtime-heading"><h2><FileTerminal size={16} />Executable</h2></div>
+      {capabilities?.version && <p className="field-help">Version: {capabilities.version}</p>}
+      {(capabilities?.compatibilityWarning || status?.compatibilityWarning) && <p className="support-warning" role="status">{capabilities?.compatibilityWarning || status?.compatibilityWarning}</p>}
       <p className="runtime-description">{capabilities ? `${supported} of ${catalog.fields.length} settings supported by this build.` : 'Check your llama.cpp build for compatible flags and aliases.'}</p>
       {capabilities && <div className={`capability-result ${supported === catalog.fields.length ? 'success' : ''}`}>{supported === catalog.fields.length ? <Check size={14} /> : <CircleHelp size={14} />}{supported === catalog.fields.length ? 'All catalog fields supported' : `${catalog.fields.length - supported} unsupported fields marked in the editor`}</div>}
       <div className="runtime-buttons"><button className="button secondary" onClick={probe} disabled={busy}><RefreshCw size={14} />Probe executable</button><button className="text-button" onClick={preview} disabled={!canPreview || busy}><Terminal size={14} />Preview command</button></div><p className="field-help">Preview and launch use saved settings only.</p>

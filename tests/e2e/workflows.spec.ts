@@ -52,6 +52,7 @@ test.beforeEach(async ({ request }) => {
   await jsonPut(request, '/api/workspace', fixture);
   await jsonPut(request, '/api/settings', {
     executablePath: path.resolve('tests/fixtures/llama-server.mjs'),
+    executableOverrides: {},
     modelsDirectory: path.resolve('tests/fixtures/models'),
     serverPort: await freePort(),
     upstreamUrl: '',
@@ -608,6 +609,68 @@ test('dialog headers and footers remain fixed while their bodies scroll', async 
     await dialog.getByRole('button', { name: 'Close dialog' }).click();
     if (lastAction === 'Save settings') await page.getByRole('button', { name: 'Share', exact: true }).click();
   }
+});
+
+test('Machine Settings checks the unsaved executable version before saving', async ({ page, request }) => {
+  await page.goto('/');
+  await openNavigation(page);
+  await page.getByRole('button', { name: 'Machine settings', exact: true }).click();
+  const dialog = page.getByRole('dialog');
+  const other = path.resolve('tests/fixtures/llama-server-other.mjs');
+  await dialog.getByRole('textbox', { name: 'llama-server executable path', exact: true }).fill(other);
+  await dialog.getByRole('button', { name: 'Check version', exact: true }).click();
+  await expect(dialog.getByText('b9001 (fedcba98)', { exact: true })).toBeVisible();
+  expect((await bootstrap(request)).settings.executablePath).toBe(path.resolve('tests/fixtures/llama-server.mjs'));
+  await dialog.getByRole('button', { name: 'Save settings', exact: true }).click();
+  await expect.poll(async () => (await bootstrap(request)).settings.executablePath).toBe(other);
+  expect((await bootstrap(request)).workspace.llamaVersion).toBe('b9001 (fedcba98)');
+});
+
+test('executable overrides inherit locally and shared version mismatches warn without blocking launch', async ({ page, request }) => {
+  await page.goto('/');
+  const input = page.getByRole('textbox', { name: 'llama-server executable path', exact: true });
+  const machine = path.resolve('tests/fixtures/llama-server.mjs');
+  const other = path.resolve('tests/fixtures/llama-server-other.mjs');
+  await expect(input).toHaveValue(machine);
+  await expect(input).toBeDisabled();
+  await page.getByRole('button', { name: 'Override executable path', exact: true }).click();
+  await input.fill(path.resolve('tests/fixtures/missing-server'));
+  await page.getByRole('button', { name: 'Save changes', exact: true }).click();
+  await expect.poll(async () => (await bootstrap(request)).settings.executableOverrides?.base).toContain('missing-server');
+  await openNavigation(page);
+  await page.getByRole('button', { name: 'Coding', exact: true }).click();
+  await page.getByRole('button', { name: 'Override executable path', exact: true }).click();
+  await input.fill(machine);
+  await page.getByRole('button', { name: 'Check version', exact: true }).click();
+  await expect(page.getByText('b9000 (abcdef12)', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Save changes', exact: true }).click();
+  await expect.poll(async () => (await bootstrap(request)).settings.executableOverrides?.groups?.coding).toBe(machine);
+  await selectModel(page);
+  await expect(input).toHaveValue(machine);
+  await expect(input).toBeDisabled();
+  await page.getByRole('button', { name: 'Override executable path', exact: true }).click();
+  await input.fill(other);
+  await page.getByRole('button', { name: 'Check version', exact: true }).click();
+  await expect(page.locator('.executable-version-check .support-warning')).toContainText('b9000 (abcdef12)');
+  await page.getByRole('button', { name: 'Save changes', exact: true }).click();
+  await expect.poll(async () => (await bootstrap(request)).workspace.models[0].llamaVersion).toBe('b9001 (fedcba98)');
+  const preview = await request.post('/api/preview', { data: { modelId: 'tiny' } });
+  expect((await preview.json()).executable).toBe(other);
+  await page.getByRole('button', { name: 'Share', exact: true }).click();
+  const share = await page.getByRole('textbox', { name: 'Workspace share link', exact: true }).inputValue();
+  const exported = decodeWorkspace(new URL(share).hash.slice(8));
+  expect(exported.models[0].llamaVersion).toBe('b9001 (fedcba98)');
+  expect(JSON.stringify(exported)).not.toContain(other);
+  expect(JSON.stringify(exported)).not.toContain('executableOverrides');
+  await page.getByRole('button', { name: 'Done', exact: true }).click();
+  await page.getByRole('button', { name: 'Reset executable path to inherited', exact: true }).click();
+  await expect(input).toHaveValue(machine);
+  await page.getByRole('button', { name: 'Save changes', exact: true }).click();
+  await expect.poll(async () => (await bootstrap(request)).settings.executableOverrides?.models?.tiny).toBeUndefined();
+  await page.getByRole('button', { name: 'Launch model', exact: true }).click();
+  await expect.poll(async () => (await bootstrap(request)).status.phase).toBe('ready');
+  await expect(page.locator('.executable-card .support-warning')).toContainText('b9001 (fedcba98)');
+  await expect(page.locator('.executable-card .support-warning')).toContainText('b9000 (abcdef12)');
 });
 
 test('fits the viewport without horizontal overflow', async ({ page }) => {

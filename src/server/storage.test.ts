@@ -16,6 +16,23 @@ beforeEach(async () => {
 afterEach(async () => { await rm(directory, { recursive: true, force: true }); });
 
 describe('private atomic persistence', () => {
+  it('persists optional machine-local executable overrides and allows removing individual layers', async () => {
+    expect(store.getSettings().executableOverrides).toBeUndefined();
+    const overrides = { base: '/local/base', groups: { group: '/local/group' }, models: { model: '/local/model' } };
+    await store.saveSettings({ executableOverrides: overrides });
+    const restored = new Store(join(directory, 'data'));
+    await restored.init();
+    expect(restored.getSettings().executableOverrides).toEqual(overrides);
+    expect(restored.getWorkspace()).not.toHaveProperty('executableOverrides');
+    await restored.saveSettings({ executableOverrides: { models: {} } });
+    expect(restored.getSettings().executableOverrides).toEqual({ models: {} });
+    for (const executableOverrides of [
+      { base: '' }, { base: 'relative' }, { base: '/bad\npath' }, { base: '/bad\x7fpath' },
+      { groups: { group: '' } }, { models: { 'invalid id': '/path' } }, { extra: '/path' },
+    ]) {
+      await expect(restored.saveSettings({ executableOverrides })).rejects.toThrow();
+    }
+  });
   it('migrates absent translation mode to passthrough and preserves an opt-in across unrelated updates/restarts', async () => {
     const { anthropicMode: _mode, ...legacy } = store.getSettings();
     await writeFile(join(directory, 'data/settings.json'), JSON.stringify(legacy));

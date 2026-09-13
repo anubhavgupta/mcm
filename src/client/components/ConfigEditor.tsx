@@ -1,38 +1,53 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { Controller, useForm, useWatch } from 'react-hook-form';
 import { ArrowDown, Check, CircleHelp, Cpu, DollarSign, FlaskConical, Gauge, HardDrive, RotateCcw, Save, SlidersHorizontal } from 'lucide-react';
 import { catalog, defaults, fieldError, fieldSupported, isFieldEnabled } from '../../shared/config';
-import type { Capabilities, SettingValue, Values, Workspace } from '../../shared/types';
+import type { Capabilities, ExecutableVersion, PublicSettings, SettingValue, Values, Workspace } from '../../shared/types';
 import type { Selection } from './Sidebar';
 import { MethodSelect } from './MethodSelect';
 import { ModelFileSelect } from './ModelFileSelect';
+import { ExecutableVersionCheck } from './ExecutableVersionCheck';
+import { executableOverride, expectedLlamaVersion, resolveExecutable } from '../../shared/executable';
 
-interface EditorValues { values: Values; overrides: Record<string, boolean> }
+interface EditorValues { values: Values; overrides: Record<string, boolean>; executableOverride: boolean; executablePath: string }
+export interface ExecutableEdit { override: boolean; path: string; version?: string }
 
-export function ConfigEditor({ workspace, selection, capabilities, onDirty, onSave, busy }: {
-  workspace: Workspace; selection: Selection; capabilities: Capabilities | null;
-  onDirty: (dirty: boolean) => void; onSave: (values: Values) => Promise<void>; busy: boolean;
+export function ConfigEditor({ workspace, settings, selection, capabilities, onDirty, onSave, busy }: {
+  workspace: Workspace; settings: PublicSettings; selection: Selection; capabilities: Capabilities | null;
+  onDirty: (dirty: boolean) => void; onSave: (values: Values, executable: ExecutableEdit) => Promise<void>; busy: boolean;
 }) {
   const group = selection.kind === 'group' ? workspace.groups.find(item => item.id === selection.id) : undefined;
   const model = selection.kind === 'model' ? workspace.models.find(item => item.id === selection.id) : undefined;
   const parentGroup = model?.groupId ? workspace.groups.find(item => item.id === model.groupId) : undefined;
   const own = selection.kind === 'base' ? workspace.base : group?.values ?? model?.values ?? {};
   const inherited = { ...defaults, ...(selection.kind !== 'base' ? workspace.base : {}), ...parentGroup?.values };
+  const localOverrides = settings.executableOverrides;
+  const ownExecutable = executableOverride(settings, selection);
+  const inheritedExecutable = selection.kind === 'base' ? settings.executablePath
+    : resolveExecutable(settings, workspace, parentGroup ? { kind: 'group', id: parentGroup.id } : { kind: 'base' });
+  const inheritedExecutableSource = parentGroup && executableOverride(settings, { kind: 'group', id: parentGroup.id }) ? 'Group'
+    : selection.kind !== 'base' && localOverrides?.base ? 'Base' : 'Machine';
+  const [checkedVersion, setCheckedVersion] = useState<ExecutableVersion | undefined>();
   const form = useForm<EditorValues>({
     defaultValues: {
       values: { ...inherited, ...own },
       overrides: Object.fromEntries(catalog.fields.map(field => [field.key, Object.hasOwn(own, field.key)])),
+      executableOverride: !!ownExecutable,
+      executablePath: ownExecutable ?? inheritedExecutable,
     },
     mode: 'onChange',
   });
   const watched = useWatch({ control: form.control });
+  const effectiveExecutable = watched.executableOverride ? watched.executablePath ?? '' : inheritedExecutable;
+  const ownVersion = selection.kind === 'base' ? workspace.llamaVersion : model?.llamaVersion ?? group?.llamaVersion;
+  const versionDirty = checkedVersion?.executablePath === effectiveExecutable && checkedVersion?.version !== ownVersion;
   const effective: Values = { ...inherited };
   for (const field of catalog.fields) {
     const value = watched.values?.[field.key];
     if (watched.overrides?.[field.key] && value !== undefined) effective[field.key] = value;
   }
   const overrideCount = Object.values(watched.overrides ?? {}).filter(Boolean).length;
-  const { isDirty } = form.formState;
+  const isDirty = form.formState.isDirty || versionDirty;
   useEffect(() => { onDirty(isDirty); }, [isDirty, onDirty]);
   useEffect(() => {
     for (const field of catalog.fields) {
@@ -61,9 +76,33 @@ export function ConfigEditor({ workspace, selection, capabilities, onDirty, onSa
       if (error) { form.setError(`values.${field.key}`, { message: error }); return; }
       values[field.key] = value;
     }
-    await onSave(values);
+    await onSave(values, {
+      override: data.executableOverride, path: effectiveExecutable,
+      version: checkedVersion?.executablePath === effectiveExecutable ? checkedVersion.version : undefined,
+    });
   });
   return <form className="config-editor" onSubmit={submit} noValidate>
+    <section className="settings-section" aria-labelledby="executable-override-heading">
+      <div className="section-header"><div><h2 id="executable-override-heading">Server executable</h2><p>Model &gt; Group &gt; Base &gt; Machine Settings. Paths stay on this machine.</p></div></div>
+      <div className={`field-card ${watched.executableOverride ? 'is-overridden' : ''}`}>
+        <div className="field-top"><label htmlFor="config-executable-path">llama-server executable path</label><span className="origin-badge">{watched.executableOverride ? selection.kind === 'base' ? 'Base' : selection.kind === 'group' ? 'Group' : 'Model' : inheritedExecutableSource}</span></div>
+        <input id="config-executable-path" type="text" disabled={!watched.executableOverride || busy}
+          {...form.register('executablePath', { validate: value => !form.getValues('executableOverride') || !!value.trim() || 'Enter an executable path or reset to inherited.' })}
+          aria-invalid={!!form.formState.errors.executablePath} />
+        {form.formState.errors.executablePath && <p className="field-error" role="alert">{form.formState.errors.executablePath.message}</p>}
+        <ExecutableVersionCheck path={effectiveExecutable} expected={expectedLlamaVersion(workspace, selection)} disabled={busy} onChecked={result => {
+          setCheckedVersion(result);
+          form.setValue('executablePath', result.executablePath, { shouldDirty: true });
+        }} />
+        <p className="field-help">Machine-local path; only checked version metadata is shared. Check the version before saving to record the build used for this configuration.</p>
+        <div className="field-bottom"><code>machine-local</code><button type="button" className="override-button" disabled={busy}
+          aria-label={watched.executableOverride ? 'Reset executable path to inherited' : 'Override executable path'}
+          onClick={() => {
+            form.setValue('executableOverride', !watched.executableOverride, { shouldDirty: true });
+            if (watched.executableOverride) form.setValue('executablePath', inheritedExecutable, { shouldDirty: true, shouldValidate: true });
+          }}>{watched.executableOverride ? <><RotateCcw size={12} />Reset</> : <>Override <span>↗</span></>}</button></div>
+      </div>
+    </section>
     <div className="inheritance-strip">
       <span className={selection.kind === 'base' ? 'current' : ''}><LayersIcon />Base</span><ArrowDown size={13} className="inherit-arrow" />
       <span className={selection.kind === 'group' ? 'current' : ''}>Group <small>optional</small></span><ArrowDown size={13} className="inherit-arrow" />

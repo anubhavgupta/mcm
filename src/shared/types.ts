@@ -25,7 +25,14 @@ export interface Catalog {
   sections: { id: string; title: string; description: string }[];
   fields: SettingField[];
 }
-export interface ConfigGroup { id: string; name: string; values: Values }
+export interface ConfigGroup { id: string; name: string; values: Values; llamaVersion?: string }
+export type ExecutableScope = { kind: 'base' } | { kind: 'group' | 'model'; id: string };
+export interface ExecutableOverrides {
+  base?: string;
+  groups?: Record<string, string>;
+  models?: Record<string, string>;
+}
+export interface ExecutableVersion { executablePath: string; version: string }
 export interface ModelPricing {
   inputUsdPerMillion: number;
   outputUsdPerMillion: number;
@@ -35,6 +42,7 @@ export interface ModelConfig {
   name: string;
   model: { filename: string; repo?: string };
   groupId?: string;
+  llamaVersion?: string;
   values: Values;
   /** Legacy input; workspace validation migrates it to values. */
   pricing?: ModelPricing;
@@ -42,6 +50,7 @@ export interface ModelConfig {
 export interface Workspace {
   version: 1;
   base: Values;
+  llamaVersion?: string;
   /** Legacy input; workspace validation migrates it to base. */
   basePricing?: ModelPricing;
   groups: ConfigGroup[];
@@ -49,6 +58,7 @@ export interface Workspace {
 }
 export interface LocalSettings {
   executablePath: string;
+  executableOverrides?: ExecutableOverrides;
   modelsDirectory: string;
   serverPort: number;
   upstreamUrl: string;
@@ -60,9 +70,9 @@ export interface LocalSettings {
 }
 export type PublicSettings = Omit<LocalSettings, 'hfToken'> & { hfTokenConfigured: boolean };
 export interface ModelFile { filename: string; relativePath: string; size: number }
-export interface Capabilities { flags: string[]; help: string }
+export interface Capabilities { flags: string[]; help: string; version?: string; compatibilityWarning?: string }
 export type ProcessPhase = 'stopped' | 'starting' | 'ready' | 'stopping' | 'failed';
-export interface ServerStatus { phase: ProcessPhase; modelId?: string; pid?: number; error?: string }
+export interface ServerStatus { phase: ProcessPhase; modelId?: string; pid?: number; error?: string; compatibilityWarning?: string }
 export interface LogEntry { timestamp: string; stream: 'stdout' | 'stderr' | 'manager'; text: string }
 export interface Throughput {
   requestId: string;

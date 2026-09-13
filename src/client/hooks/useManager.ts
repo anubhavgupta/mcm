@@ -9,6 +9,7 @@ const statusSchema = z.object({
   modelId: z.string().optional(),
   pid: z.number().optional(),
   error: z.string().optional(),
+  compatibilityWarning: z.string().optional(),
 });
 const eventSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('usage'), data: usageSummarySchema }),

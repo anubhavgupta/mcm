@@ -4,6 +4,10 @@ import http from 'node:http';
 import { readFile } from 'node:fs/promises';
 
 const args = process.argv.slice(2);
+if (args.includes('--version')) {
+  console.log('version: b9000 (abcdef12)');
+  process.exit(0);
+}
 if (args.includes('--help')) {
   const catalog = JSON.parse(await readFile(new URL('../../src/shared/catalog.json', import.meta.url), 'utf8'));
   console.log(catalog.fields.flatMap(field => [field.flag, ...(field.aliases ?? [])]).filter(Boolean).join('\n'));

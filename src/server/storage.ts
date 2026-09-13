@@ -10,8 +10,15 @@ export const relativeBinding = z.string().min(1).max(4096).refine(value =>
   !value.split('/').some(part => part === '..' || part === '.' || part === '') &&
   /\.gguf$/i.test(value), 'Use a discovered relative GGUF path inside the models directory.');
 const pathString = z.string().max(4096).refine(value => !/[\x00-\x1f]/.test(value), 'Invalid path.');
+export const executablePathSchema = pathString.refine(value => value.length > 0 && isAbsolute(value) && !/[\x7f]/.test(value), 'Use an absolute executable path.');
+const executableOverridesSchema = z.object({
+  base: executablePathSchema.optional(),
+  groups: z.record(z.string().regex(/^[a-zA-Z0-9_-]{1,100}$/), executablePathSchema).optional(),
+  models: z.record(z.string().regex(/^[a-zA-Z0-9_-]{1,100}$/), executablePathSchema).optional(),
+}).strict();
 const settingsShape = {
   executablePath: pathString,
+  executableOverrides: executableOverridesSchema.optional(),
   modelsDirectory: pathString,
   serverPort: z.number().int().min(1024).max(65535),
   upstreamUrl: z.string().max(4096).refine(value => {

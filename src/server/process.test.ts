@@ -7,7 +7,7 @@ import { randomUUID } from 'node:crypto';
 import type { AddressInfo } from 'node:net';
 import { Store } from './storage';
 import { Events } from './events';
-import { discoverCapabilities, ProcessManager } from './process';
+import { discoverCapabilities, discoverVersion, ProcessManager } from './process';
 import { emptyWorkspace } from '../shared/config';
 
 let directory: string;
@@ -65,6 +65,53 @@ describe('bounded executable capability discovery', () => {
   });
 });
 
+describe('private bounded version discovery', () => {
+  it.each(['stdout', 'stderr'])('extracts only a canonical version from %s diagnostics', async stream => {
+    vi.stubEnv('HF_TOKEN', 'hf_private');
+    vi.stubEnv('HUGGING_FACE_HUB_TOKEN', 'hf_private');
+    vi.stubEnv('HUGGINGFACE_TOKEN', 'hf_private');
+    vi.stubEnv('OTHER_SECRET', 'hf_private');
+    const path = await fixture(`
+      if (process.argv.slice(2).join() !== '--version') process.exit(9);
+      if (['HF_TOKEN', 'HUGGING_FACE_HUB_TOKEN', 'HUGGINGFACE_TOKEN', 'OTHER_SECRET'].some(key => process.env[key])) process.exit(8);
+      process.${stream}.write('CUDA init: /private/build hf_private\\nversion: 12345 (abcdef)\\nbuilt at /private/user\\n');
+    `);
+    await store.saveSettings({ executablePath: path, hfToken: 'hf_private' });
+    expect(await discoverVersion(store.getSettings())).toEqual({ executablePath: path, version: '12345 (abcdef)' });
+  });
+  it('recognizes prefixed builds without publishing paths, credentials or trailing text', async () => {
+    const path = await fixture(`console.log('llama.cpp version: b1234 (abcdef) built at /private/path credential=secret');`);
+    await store.saveSettings({ executablePath: path });
+    expect((await discoverVersion(store.getSettings())).version).toBe('b1234 (abcdef)');
+    await store.saveSettings({ hfToken: 'abcdef' });
+    expect((await discoverVersion(store.getSettings())).version).toBe('b1234');
+  });
+  it('rejects unrecognized output without echoing private diagnostics', async () => {
+    for (const output of ['built with clang 19 at /private/user hf_secret', 'version: /private/1234', 'version: hf_secret']) {
+      await store.saveSettings({ executablePath: await fixture(`console.log(${JSON.stringify(output)});`) });
+      await expect(discoverVersion(store.getSettings())).rejects.toThrow('did not report a recognized');
+    }
+  });
+  it('limits time and total output across both streams, and reports missing paths', async () => {
+    await store.saveSettings({ executablePath: await fixture('setInterval(() => {}, 1000);') });
+    await expect(discoverVersion(store.getSettings(), 100)).rejects.toThrow('--version timed out');
+    await store.saveSettings({ executablePath: await fixture(`process.stdout.write('x'.repeat(700000)); process.stderr.write('x'.repeat(700000)); setInterval(() => {}, 1000);`) });
+    await expect(discoverVersion(store.getSettings(), 2000)).rejects.toThrow('output limit');
+    await store.saveSettings({ executablePath: join(directory, 'missing') });
+    await expect(discoverVersion(store.getSettings())).rejects.toThrow('missing or not executable');
+  });
+  it('retains valid help with a visible warning when --version is unsupported', async () => {
+    await store.saveSettings({ executablePath: await fixture(`
+      if (process.argv.includes('--version')) process.exit(1);
+      console.log('--model --host --port');
+    `) });
+    const result = await discoverCapabilities(store.getSettings());
+    expect(result.flags).toContain('--model');
+    expect(result.version).toBeUndefined();
+    expect(result.compatibilityWarning).toContain('Could not verify executable version');
+  });
+});
+
 describe('serialized child lifecycle and health readiness', () => {
   it('previews ordered speculation and resolves a draft GGUF separately from the target', async () => {
     const path = await fixture(`throw new Error('preview must not spawn');`);
@@ -102,15 +149,22 @@ describe('serialized child lifecycle and health readiness', () => {
     manager = new ProcessManager(store, new Events());
     await expect(manager.preview('model')).rejects.toThrow('absent.gguf was not found');
   });
-  async function serverFixture(ignoreTerm = false, healthDelay = 250): Promise<string> {
+  async function serverFixture(ignoreTerm = false, healthDelay = 250, version = '12345 (abcdef)', helpDelay = 0): Promise<string> {
     return fixture(`
       import { createServer } from 'node:http';
       import { writeFileSync } from 'node:fs';
+      if (process.argv.includes('--version')) {
+        console.log(${JSON.stringify(`version: ${version}`)});
+        process.exit(0);
+      }
       if (process.argv.includes('--help')) {
+        writeFileSync(${JSON.stringify(join(directory, 'help-started.txt'))}, process.argv[1]);
+        if (${helpDelay}) await new Promise(resolve => setTimeout(resolve, ${helpDelay}));
         console.log('--model --host --port --metrics --threads');
         process.exit(0);
       }
       writeFileSync(${JSON.stringify(join(directory, 'args.json'))}, JSON.stringify(process.argv.slice(2)));
+      writeFileSync(${JSON.stringify(join(directory, 'executable.txt'))}, process.argv[1]);
       writeFileSync(${JSON.stringify(join(directory, 'environment.json'))}, JSON.stringify({ hf: process.env.HF_TOKEN ?? null }));
       const port = Number(process.argv[process.argv.indexOf('--port') + 1]);
       const start = Date.now();
@@ -121,6 +175,67 @@ describe('serialized child lifecycle and health readiness', () => {
       ${ignoreTerm ? "process.on('SIGTERM', () => {});" : "process.on('SIGTERM', () => server.close(() => process.exit(0)));"}
     `);
   }
+  it('resolves all preview layers and uses current model/group overrides for launch and restart', async () => {
+    const machine = await serverFixture();
+    const base = await serverFixture();
+    const group = await serverFixture(false, 0, '23456 (abcdef)');
+    const model = await serverFixture(false, 0, '34567 (abcdef)');
+    const workspace = store.getWorkspace();
+    workspace.llamaVersion = '1';
+    workspace.groups = [{ id: 'group', name: 'Group', values: {}, llamaVersion: '23456 (abcdef)' }];
+    workspace.models[0]!.groupId = 'group';
+    workspace.models[0]!.llamaVersion = '34567 (abcdef)';
+    await store.saveWorkspace(workspace);
+    await store.saveSettings({ executablePath: machine });
+    manager = new ProcessManager(store, new Events(), { healthIntervalMs: 10 });
+    expect((await manager.preview('model')).executable).toBe(machine);
+    await store.saveSettings({ executableOverrides: { base } });
+    expect((await manager.preview('model')).executable).toBe(base);
+    await store.saveSettings({ executableOverrides: { base, groups: { group } } });
+    expect((await manager.preview('model')).executable).toBe(group);
+    await store.saveSettings({ executableOverrides: { base, groups: { group }, models: { model } } });
+    expect((await manager.preview('model')).executable).toBe(model);
+    expect((await manager.launch('model')).compatibilityWarning).toBeUndefined();
+    await vi.waitFor(() => expect(manager!.getStatus().phase).toBe('ready'));
+    expect(await readFile(join(directory, 'executable.txt'), 'utf8')).toBe(model);
+    await store.saveSettings({ executableOverrides: { base, groups: { group } } });
+    const restarted = await manager.restart();
+    expect(restarted.compatibilityWarning).toContain('34567 (abcdef)');
+    expect(restarted.compatibilityWarning).toContain('23456 (abcdef)');
+    await vi.waitFor(() => expect(manager!.getStatus().phase).toBe('ready'));
+    expect(await readFile(join(directory, 'executable.txt'), 'utf8')).toBe(group);
+    expect(manager.getStatus().compatibilityWarning).toBe(restarted.compatibilityWarning);
+    expect(store.getWorkspace()).toEqual(workspace);
+    expect((await manager.stop()).compatibilityWarning).toBeUndefined();
+  });
+  it('warns but reaches ready when version detection fails', async () => {
+    await store.saveSettings({ executablePath: await serverFixture(false, 0, 'unknown') });
+    const events = new Events();
+    const log = vi.spyOn(events, 'log');
+    manager = new ProcessManager(store, events, { healthIntervalMs: 10 });
+    const status = await manager.launch('model');
+    expect(status.compatibilityWarning).toContain('Could not verify executable version');
+    await vi.waitFor(() => expect(manager!.getStatus().phase).toBe('ready'));
+    expect(manager.getStatus().compatibilityWarning).toBe(status.compatibilityWarning);
+    expect(log).toHaveBeenCalledWith(status.compatibilityWarning);
+  });
+  it('keeps one executable and workspace snapshot while settings change during startup', async () => {
+    const original = await serverFixture(false, 0, '1', 250);
+    const replacement = await serverFixture(false, 0, '2');
+    await store.saveSettings({ executableOverrides: { base: original } });
+    await store.saveWorkspace({ ...store.getWorkspace(), llamaVersion: '1' });
+    manager = new ProcessManager(store, new Events(), { healthIntervalMs: 10 });
+    const launching = manager.launch('model');
+    await vi.waitFor(async () => expect(await readFile(join(directory, 'help-started.txt'), 'utf8')).toBe(original));
+    await store.saveSettings({ executableOverrides: { base: replacement } });
+    await store.saveWorkspace({ ...store.getWorkspace(), llamaVersion: '2' });
+    expect((await launching).compatibilityWarning).toBeUndefined();
+    await vi.waitFor(() => expect(manager!.getStatus().phase).toBe('ready'));
+    expect(await readFile(join(directory, 'executable.txt'), 'utf8')).toBe(original);
+    expect((await manager.restart()).compatibilityWarning).toBeUndefined();
+    await vi.waitFor(() => expect(manager!.getStatus().phase).toBe('ready'));
+    expect(await readFile(join(directory, 'executable.txt'), 'utf8')).toBe(replacement);
+  });
   it('does not mark spawn ready, polls /health and serializes stop/restart while awaiting exit', async () => {
     vi.stubEnv('HF_TOKEN', 'hf_private');
     const path = await serverFixture(true);

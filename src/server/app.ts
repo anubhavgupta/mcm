@@ -1,10 +1,11 @@
 import express, { type ErrorRequestHandler, type RequestHandler } from 'express';
 import { z } from 'zod';
 import { repoSchema, resolvePricing } from '../shared/config';
+import { expectedLlamaVersion } from '../shared/executable';
 import { ApiError } from './errors';
-import { Store } from './storage';
+import { executablePathSchema, Store } from './storage';
 import { Events } from './events';
-import { ProcessManager, discoverCapabilities, type ProcessOptions } from './process';
+import { ProcessManager, discoverCapabilities, discoverVersion, scopedSettings, type ProcessOptions } from './process';
 import { discoverModels } from './models';
 import { HuggingFace, type HubOptions } from './huggingface';
 import { ThroughputInterceptor, type Interceptor } from './interceptors';
@@ -70,6 +71,14 @@ const modelRequest = z.object({ modelId: z.string().regex(/^[a-zA-Z0-9_-]{1,100}
 const hubRequest = z.object({ repo: repoSchema.optional() }).strict();
 const hubPushRequest = hubRequest.extend({ modelId: modelRequest.shape.modelId.optional() });
 const noBody = z.object({}).strict();
+const versionRequest = z.object({ executablePath: executablePathSchema }).strict();
+const capabilitiesRequest = z.object({
+  scope: z.discriminatedUnion('kind', [
+    z.object({ kind: z.literal('base') }).strict(),
+    z.object({ kind: z.literal('group'), id: modelRequest.shape.modelId }).strict(),
+    z.object({ kind: z.literal('model'), id: modelRequest.shape.modelId }).strict(),
+  ]).optional(),
+}).strict();
 
 export async function createApp(options: AppOptions) {
   const store = new Store(options.dataDir);
@@ -127,8 +136,14 @@ export async function createApp(options: AppOptions) {
     response.json({ models: await discoverModels(store.getSettings().modelsDirectory) });
   });
   app.post('/api/capabilities', async (request, response) => {
-    noBody.parse(request.body ?? {});
-    response.json(await discoverCapabilities(store.getSettings(), options.process?.helpTimeoutMs));
+    const { scope = { kind: 'base' } } = capabilitiesRequest.parse(request.body ?? {});
+    const workspace = store.getWorkspace();
+    const settings = scopedSettings(store.getSettings(), workspace, scope);
+    response.json(await discoverCapabilities(settings, options.process?.helpTimeoutMs, expectedLlamaVersion(workspace, scope), options.process?.versionTimeoutMs));
+  });
+  app.post('/api/version', async (request, response) => {
+    const { executablePath } = versionRequest.parse(request.body);
+    response.json(await discoverVersion({ ...store.getSettings(), executablePath }, options.process?.versionTimeoutMs));
   });
   app.post('/api/preview', async (request, response) => {
     response.json(await manager.preview(modelRequest.parse(request.body).modelId));

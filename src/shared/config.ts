@@ -75,6 +75,7 @@ export const valuesSchema = z.record(z.string(), z.union([z.string(), z.number()
 });
 
 const idSchema = z.string().regex(/^[a-zA-Z0-9_-]{1,100}$/);
+export const llamaVersionSchema = z.string().trim().min(1).max(256).refine(value => !/[\x00-\x1f]/.test(value), 'Use a single version identifier.');
 export const pricingSchema = z.object({
   inputUsdPerMillion: z.number().finite().min(0).max(1_000_000),
   outputUsdPerMillion: z.number().finite().min(0).max(1_000_000),
@@ -92,6 +93,7 @@ const modelSchema = z.object({
     repo: repoSchema.optional(),
   }).strict(),
   groupId: idSchema.optional(),
+  llamaVersion: llamaVersionSchema.optional(),
   values: valuesSchema,
   pricing: pricingSchema.optional(),
 }).strict();
@@ -99,8 +101,9 @@ const modelSchema = z.object({
 export const workspaceSchema = z.object({
   version: z.literal(1),
   base: valuesSchema,
+  llamaVersion: llamaVersionSchema.optional(),
   basePricing: pricingSchema.optional(),
-  groups: z.array(z.object({ id: idSchema, name: z.string().trim().min(1).max(120), values: valuesSchema }).strict()).max(100),
+  groups: z.array(z.object({ id: idSchema, name: z.string().trim().min(1).max(120), values: valuesSchema, llamaVersion: llamaVersionSchema.optional() }).strict()).max(100),
   models: z.array(modelSchema).max(500),
 }).strict().superRefine((workspace, ctx) => {
   for (const collection of ['models', 'groups'] as const) {
